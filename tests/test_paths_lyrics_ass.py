@@ -1,6 +1,13 @@
 from ktv_mux.alignment import generate_even_alignment, shift_alignment, update_alignment_lines
 from ktv_mux.ass import ass_karaoke_text, build_ass, seconds_to_ass_time
-from ktv_mux.lyrics import normalize_lyrics_text, parse_lrc_text, parse_lyrics_text, split_tokens
+from ktv_mux.lyrics import (
+    extract_lrc_entries,
+    lrc_text_to_alignment,
+    normalize_lyrics_text,
+    parse_lrc_text,
+    parse_lyrics_text,
+    split_tokens,
+)
 from ktv_mux.paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
 
 
@@ -28,6 +35,19 @@ def test_lyrics_cleanup_handles_lrc_timestamps_and_chords():
     text = "[00:01.00][C]  第一  句　歌词\n[00:02.00]第二句"
     assert parse_lrc_text(text) == ["第一 句 歌词", "第二句"]
     assert normalize_lyrics_text(text) == "第一 句 歌词\n第二句"
+
+
+def test_lrc_timestamps_become_initial_alignment():
+    text = "[00:01.00]朋友一生一起走\n[00:04.50]那些日子不再有"
+
+    entries = extract_lrc_entries(text)
+    alignment = lrc_text_to_alignment(text)
+
+    assert entries[0]["start"] == 1.0
+    assert alignment["backend"] == "lrc"
+    assert alignment["lines"][0]["start"] == 1.0
+    assert alignment["lines"][0]["end"] == 4.5
+    assert alignment["lines"][0]["tokens"][0]["text"] == "朋"
 
 
 def test_split_tokens_uses_chars_for_chinese_and_words_for_spaced_text():

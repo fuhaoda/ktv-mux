@@ -14,9 +14,13 @@
 - `diagnostics.py`: local dependency and per-song failure diagnosis.
 - `pipeline.py`: stage orchestration and status/report writing.
 - `jobs.py`: file-backed local queue for long-running Web tasks.
+- `versions.py`: output take metadata, notes, delete, and set-current behavior.
+- `waveform.py`: lightweight WAV waveform SVG rendering for subtitle timing.
 - `cli.py`: `ktv` command line interface.
 - `web.py`: local FastAPI routes.
 - `views.py`: server-rendered HTML for the local workbench.
+- `templates/base.html`: shared page shell for the local Web UI.
+- `static/style.css`: Web UI styling without a frontend build step.
 
 ## Library Layout
 
@@ -41,8 +45,10 @@ library/
     {song_id}.ktv.mkv
     report.json
     takes/
+      takes.json
   jobs/
     {job_id}.json
+    {job_id}.cancel
 ```
 
 ## Stages
@@ -61,8 +67,10 @@ library/
 
 ## Web Behavior
 
-Long-running stage buttons enqueue a file-backed local job and immediately return to the song page. On app startup, jobs left in `queued` or `running` state are recovered and queued again. Queued jobs can be canceled, failed/canceled jobs can be retried, and running Demucs progress is estimated from the stage log.
+Long-running stage buttons enqueue a file-backed local job and immediately return to the song page. On app startup, jobs left in `queued` or `running` state are recovered and queued again. Jobs run with a small worker pool so different songs can progress in parallel, while each song is still serialized by the per-song lock.
+
+Queued jobs and running jobs can be canceled. Running subprocesses receive a cancel file path; FFmpeg, yt-dlp, and Demucs wrappers monitor it and terminate the child process when requested. Failed/canceled jobs can be retried. Demucs progress is estimated from the stage log, and URL download progress is estimated from `import.log`.
 
 Each pipeline stage takes a per-song file lock, so a user can click multiple actions without corrupting one song's working files. Failures are written to `status.json` and `report.json`; ordinary request failures render a friendly error page rather than a raw Internal Server Error.
 
-Outputs keep a stable "latest" file for normal use and a timestamped copy under `takes/` for comparison across models, source tracks, and subtitle edits.
+Outputs keep a stable "latest" file for normal use and a timestamped copy under `takes/` for comparison across models, source tracks, and subtitle edits. `takes.json` stores labels, notes, and which take is currently promoted back to the stable output filename.

@@ -2,6 +2,22 @@
 
 ## Start The App
 
+One-click macOS:
+
+```bash
+cd /Users/hfu@amgen.com/Documents/MyGit/ktv-mux
+scripts/bootstrap_mac.sh
+scripts/ktv-start.command
+```
+
+Optional Desktop launcher:
+
+```bash
+make launcher
+```
+
+Manual setup:
+
 ```bash
 cd /Users/hfu@amgen.com/Documents/MyGit/ktv-mux
 python3.12 -m venv .venv
@@ -16,7 +32,7 @@ Open `http://127.0.0.1:8000`.
 ```bash
 .venv/bin/ktv import assets/朋友-周华健.mkv
 .venv/bin/ktv probe 朋友-周华健
-.venv/bin/ktv preview-tracks 朋友-周华健
+.venv/bin/ktv preview-tracks 朋友-周华健 --start 30 --duration 20
 .venv/bin/ktv extract 朋友-周华健 --audio-index 0
 .venv/bin/ktv separate 朋友-周华健
 ```
@@ -38,7 +54,7 @@ ktv extract 朋友-周华健 --audio-index 0  # Web Track 1
 ktv extract 朋友-周华健 --audio-index 1  # Web Track 2
 ```
 
-Before extracting, use `preview-tracks` or the Web `Preview Tracks` button to create short playable clips for every source audio track.
+Before extracting, use `preview-tracks` or the Web `Preview Tracks` button to create playable clips for every source audio track. `--start` is useful when the first seconds are silence, applause, or an intro.
 
 ## Replace Track 2 With A Generated Instrumental
 
@@ -69,7 +85,16 @@ library/output/朋友-周华健/report.json
 library/output/朋友-周华健/takes/
 ```
 
-The Web detail page shows playable audio, recent job state, the Demucs log link, track previews, versioned takes, and WAV level metrics including clipping and silence ratio.
+The Web detail page shows playable audio, recent job state, the Demucs log link, track previews, editable versioned takes, waveform/timeline subtitle editing, and WAV level metrics including clipping, silence ratio, and recommendations.
+
+CLI take management:
+
+```bash
+ktv takes 朋友-周华健
+ktv take-note 朋友-周华健 instrumental.20260425T010101Z.wav --label "good take" --note "less vocal bleed"
+ktv take-current 朋友-周华健 instrumental.20260425T010101Z.wav
+ktv take-delete 朋友-周华健 instrumental.20260425T010101Z.wav
+```
 
 ## Full KTV MKV With Lyrics
 
@@ -92,7 +117,7 @@ ktv align 朋友-周华健 --backend funasr
 
 Use a positive shift when subtitles appear too early; use a negative shift when they appear too late. The Web detail page also exposes a line-level timing editor after `align` creates `alignment.json`.
 
-LRC timestamps and simple chord tags are cleaned when lyrics are saved:
+LRC timestamps become initial subtitle timing when lyrics are saved; simple chord tags are cleaned from the stored `lyrics.txt`:
 
 ```text
 [00:01.00][C]  第一  句　歌词
@@ -104,9 +129,15 @@ becomes:
 第一 句 歌词
 ```
 
+and writes draft timing to:
+
+```text
+library/work/{song_id}/alignment.json
+```
+
 ## Jobs And Diagnostics
 
-The Web UI has a local job drawer with progress bars, queued-job cancel, and failed-job retry. Demucs progress is estimated from `separate.log`.
+The Web UI has a local job drawer with progress bars, queued/running-job cancel, and failed/canceled-job retry. Demucs progress is estimated from `separate.log`; URL download progress is estimated from `import.log`.
 
 Run local diagnostics:
 

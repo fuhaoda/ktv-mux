@@ -1,4 +1,4 @@
-.PHONY: setup setup-separation setup-ml test lint serve smoke clean
+.PHONY: setup setup-separation setup-ml test lint serve launcher smoke clean
 
 PYTHON ?= python3.12
 VENV ?= .venv
@@ -24,10 +24,13 @@ lint:
 serve:
 	$(KTV) --library library serve --host 127.0.0.1 --port 8000
 
+launcher:
+	scripts/install_macos_launcher.sh
+
 smoke:
 	$(KTV) import assets/朋友-周华健.mkv
 	$(KTV) probe 朋友-周华健
-	$(KTV) preview-tracks 朋友-周华健 --duration 5
+	$(KTV) preview-tracks 朋友-周华健 --start 30 --duration 5
 	$(KTV) extract 朋友-周华健 --audio-index 0
 	$(KTV) doctor 朋友-周华健
 

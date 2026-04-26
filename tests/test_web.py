@@ -12,6 +12,7 @@ def test_index_makes_song_id_optional(tmp_path):
     assert "Choose File" in response.text
     assert "Recent Jobs" in response.text
     assert "Doctor" in response.text
+    assert "/static/style.css" in response.text
 
 
 def test_upload_defaults_song_id_to_filename(tmp_path):
@@ -39,9 +40,22 @@ def test_detail_exposes_separate_steps_and_management(tmp_path):
     assert response.status_code == 200
     assert "Shift ASS" in response.text
     assert "Preview Tracks" in response.text
+    assert "Start seconds" in response.text
     assert "Diagnostics" in response.text
     assert "Clean Regenerable Work Files" in response.text
     assert "Delete Song" in response.text
+
+
+def test_waveform_route_returns_svg(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+    library.ensure_song_dirs("song")
+    client = TestClient(create_app(library))
+
+    response = client.get("/songs/song/waveform.svg")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.text.startswith("<svg")
 
 
 def test_doctor_page_renders(tmp_path):

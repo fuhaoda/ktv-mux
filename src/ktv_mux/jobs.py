@@ -46,11 +46,15 @@ class Job:
 
 
 class LocalJobRunner:
-    def __init__(self, library: LibraryPaths, pipeline: Pipeline) -> None:
+    def __init__(self, library: LibraryPaths, pipeline: Pipeline, *, worker_count: int = 2) -> None:
         self.library = library
         self.pipeline = pipeline
         self._queue: queue.Queue[str] = queue.Queue()
-        self._thread = threading.Thread(target=self._worker, name="ktv-job-runner", daemon=True)
+        self._worker_count = max(1, worker_count)
+        self._threads = [
+            threading.Thread(target=self._worker, name=f"ktv-job-runner-{index + 1}", daemon=True)
+            for index in range(self._worker_count)
+        ]
         self._started = False
         self._state_lock = threading.Lock()
 
@@ -58,7 +62,8 @@ class LocalJobRunner:
         self.library.jobs_root.mkdir(parents=True, exist_ok=True)
         self._recover_jobs()
         if not self._started:
-            self._thread.start()
+            for thread in self._threads:
+                thread.start()
             self._started = True
 
     def submit(self, song_id: str, stage: str, params: dict[str, Any] | None = None) -> Job:
@@ -79,16 +84,25 @@ class LocalJobRunner:
         job = self._load(job_id)
         if job is None:
             return False
-        if job.state != "queued":
-            job.message = "Only queued jobs can be canceled."
+        if job.state == "queued":
+            job.state = "canceled"
+            job.message = "canceled before start"
+            job.progress = 0
             self._save(job)
-            return False
-        job.state = "canceled"
-        job.message = "canceled before start"
-        job.progress = 0
+            append_stage_status(self.library.status_json(job.song_id), job.stage, "canceled", f"job {job.job_id}")
+            return True
+        if job.state in {"running", "canceling"}:
+            cancel_file = self.library.job_cancel_file(job.job_id)
+            cancel_file.parent.mkdir(parents=True, exist_ok=True)
+            cancel_file.write_text(utc_now() + "\n", encoding="utf-8")
+            job.state = "canceling"
+            job.message = "cancel requested"
+            self._save(job)
+            append_stage_status(self.library.status_json(job.song_id), job.stage, "canceling", f"job {job.job_id}")
+            return True
+        job.message = f"Cannot cancel a {job.state} job."
         self._save(job)
-        append_stage_status(self.library.status_json(job.song_id), job.stage, "canceled", f"job {job.job_id}")
-        return True
+        return False
 
     def retry(self, job_id: str) -> Job | None:
         job = self._load(job_id)
@@ -109,6 +123,12 @@ class LocalJobRunner:
 
     def _recover_jobs(self) -> None:
         for job in reversed(self.list_jobs(limit=1000)):
+            if job.state == "canceling":
+                job.state = "canceled"
+                job.message = "canceled after app restart"
+                job.updated_at = utc_now()
+                self._save(job)
+                continue
             if job.state in {"queued", "running"}:
                 job.state = "queued"
                 job.message = "recovered after app start"
@@ -143,48 +163,79 @@ class LocalJobRunner:
                 self._queue.task_done()
 
     def _run(self, job: Job) -> None:
+        cancel_file = self.library.job_cancel_file(job.job_id)
+        if cancel_file.exists():
+            cancel_file.unlink()
         job.state = "running"
         job.message = ""
         job.attempts += 1
         job.progress = 5
         self._save(job)
         try:
-            run_pipeline_stage(self.pipeline, job)
+            run_pipeline_stage(self.pipeline, job, cancel_file=cancel_file)
         except Exception as exc:
-            job.state = "failed"
+            canceled = cancel_file.exists() or "command canceled" in str(exc).lower()
+            job.state = "canceled" if canceled else "failed"
             job.message = str(exc)
+            job.progress = 0
             self._save(job)
-            append_stage_status(self.library.status_json(job.song_id), job.stage, "failed", str(exc))
+            append_stage_status(self.library.status_json(job.song_id), job.stage, job.state, str(exc))
+            if cancel_file.exists():
+                cancel_file.unlink()
             return
+        if cancel_file.exists():
+            cancel_file.unlink()
         job.state = "completed"
         job.message = "completed"
         job.progress = 100
         self._save(job)
 
 
-def run_pipeline_stage(pipeline: Pipeline, job: Job) -> None:
+def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None = None) -> None:
     params = job.params
-    if job.stage == "probe":
+    if job.stage in {"import", "import-url"}:
+        pipeline.import_source(
+            str(params["source"]),
+            song_id=job.song_id,
+            title=params.get("title") or None,
+            artist=params.get("artist") or None,
+            cancel_file=cancel_file,
+        )
+    elif job.stage == "probe":
         pipeline.probe(job.song_id)
     elif job.stage == "extract":
-        pipeline.extract(job.song_id, audio_index=int(params.get("audio_index", 0)))
+        pipeline.extract(job.song_id, audio_index=int(params.get("audio_index", 0)), cancel_file=cancel_file)
     elif job.stage == "preview-tracks":
-        pipeline.preview_tracks(job.song_id, duration=float(params.get("duration", 20.0)))
+        pipeline.preview_tracks(
+            job.song_id,
+            duration=float(params.get("duration", 20.0)),
+            start=float(params.get("start", 0.0)),
+            cancel_file=cancel_file,
+        )
     elif job.stage == "separate":
-        pipeline.separate(job.song_id)
+        pipeline.separate(job.song_id, model=str(params.get("model", "htdemucs")), cancel_file=cancel_file)
     elif job.stage == "align":
-        pipeline.align(job.song_id)
+        pipeline.align(job.song_id, backend=str(params.get("backend", "auto")))
     elif job.stage == "shift-subtitles":
         pipeline.shift_subtitles(job.song_id, seconds=float(params.get("seconds", 0.0)))
     elif job.stage == "edit-subtitles":
         pipeline.edit_subtitles(job.song_id, list(params.get("updates") or []))
     elif job.stage == "mux":
-        pipeline.mux(job.song_id, audio_order=str(params.get("audio_order", "instrumental-first")))
+        pipeline.mux(
+            job.song_id,
+            audio_order=str(params.get("audio_order", "instrumental-first")),
+            cancel_file=cancel_file,
+        )
     elif job.stage == "replace-audio":
-        pipeline.replace_audio(job.song_id, keep_audio_index=int(params.get("keep_audio_index", 0)))
+        pipeline.replace_audio(
+            job.song_id,
+            keep_audio_index=int(params.get("keep_audio_index", 0)),
+            copy_subtitles=bool(params.get("copy_subtitles", True)),
+            cancel_file=cancel_file,
+        )
     elif job.stage == "clean-work":
         pipeline.clean_work(job.song_id)
     elif job.stage == "process":
-        pipeline.process(job.song_id)
+        pipeline.process(job.song_id, align_backend=str(params.get("align_backend", "auto")), cancel_file=cancel_file)
     else:
         raise ValueError(f"unknown stage: {job.stage}")

@@ -88,10 +88,11 @@ def build_extract_preview_cmd(
     *,
     audio_index: int = 0,
     duration: float = 20.0,
+    start: float = 0.0,
 ) -> list[str]:
     if audio_index < 0:
         raise KtvError("audio_index must be 0 or greater")
-    return [
+    cmd = [
         "ffmpeg",
         "-y",
         "-hide_banner",
@@ -110,19 +111,39 @@ def build_extract_preview_cmd(
         "pcm_s16le",
         str(output_wav),
     ]
+    if start > 0:
+        cmd[5:5] = ["-ss", f"{start:.3f}"]
+    return cmd
 
 
-def extract_mix(source: Path, output_wav: Path, *, audio_index: int = 0) -> Path:
+def extract_mix(
+    source: Path,
+    output_wav: Path,
+    *,
+    audio_index: int = 0,
+    cancel_file: Path | None = None,
+) -> Path:
     require_command("ffmpeg")
     output_wav.parent.mkdir(parents=True, exist_ok=True)
-    run_command(build_extract_mix_cmd(source, output_wav, audio_index=audio_index))
+    run_command(build_extract_mix_cmd(source, output_wav, audio_index=audio_index), cancel_file=cancel_file)
     return output_wav
 
 
-def extract_preview(source: Path, output_wav: Path, *, audio_index: int = 0, duration: float = 20.0) -> Path:
+def extract_preview(
+    source: Path,
+    output_wav: Path,
+    *,
+    audio_index: int = 0,
+    duration: float = 20.0,
+    start: float = 0.0,
+    cancel_file: Path | None = None,
+) -> Path:
     require_command("ffmpeg")
     output_wav.parent.mkdir(parents=True, exist_ok=True)
-    run_command(build_extract_preview_cmd(source, output_wav, audio_index=audio_index, duration=duration))
+    run_command(
+        build_extract_preview_cmd(source, output_wav, audio_index=audio_index, duration=duration, start=start),
+        cancel_file=cancel_file,
+    )
     return output_wav
 
 
@@ -173,6 +194,7 @@ def run_demucs_two_stems(
     *,
     model: str = "htdemucs",
     log_path: Path | None = None,
+    cancel_file: Path | None = None,
 ) -> dict[str, Any]:
     demucs_root = work_dir / "demucs"
     demucs_root.mkdir(parents=True, exist_ok=True)
@@ -184,9 +206,9 @@ def run_demucs_two_stems(
         try:
             cmd = build_demucs_cmd(mix_wav, demucs_root, model=model, device=candidate)
             if log_path:
-                run_command_logged(cmd, log_path=log_path)
+                run_command_logged(cmd, log_path=log_path, cancel_file=cancel_file)
             else:
-                run_command(cmd)
+                run_command(cmd, cancel_file=cancel_file)
             break
         except KtvError:
             if candidate == "cpu":
@@ -310,6 +332,7 @@ def mux_ktv(
     *,
     duration_limit: float | None = None,
     audio_order: str = "instrumental-first",
+    cancel_file: Path | None = None,
 ) -> Path:
     require_command("ffmpeg")
     output_mkv.parent.mkdir(parents=True, exist_ok=True)
@@ -322,7 +345,8 @@ def mux_ktv(
             output_mkv,
             duration_limit=duration_limit,
             audio_order=audio_order,
-        )
+        ),
+        cancel_file=cancel_file,
     )
     return output_mkv
 
@@ -394,6 +418,7 @@ def replace_audio_track(
     keep_audio_index: int = 0,
     copy_subtitles: bool = True,
     duration_limit: float | None = None,
+    cancel_file: Path | None = None,
 ) -> Path:
     require_command("ffmpeg")
     output_mkv.parent.mkdir(parents=True, exist_ok=True)
@@ -405,6 +430,7 @@ def replace_audio_track(
             keep_audio_index=keep_audio_index,
             copy_subtitles=copy_subtitles,
             duration_limit=duration_limit,
-        )
+        ),
+        cancel_file=cancel_file,
     )
     return output_mkv

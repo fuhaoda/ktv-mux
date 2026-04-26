@@ -50,3 +50,4 @@ def test_separation_quality_report_compares_stems(tmp_path):
     assert report["instrumental"]["exists"] is True
     assert report["instrumental_rms_delta_db"] < 0
     assert report["vocals_rms_delta_db"] < report["instrumental_rms_delta_db"]
+    assert report["recommendations"]

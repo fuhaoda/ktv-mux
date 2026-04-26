@@ -48,6 +48,12 @@ def test_build_extract_preview_cmd_limits_duration():
     assert "12.500" in cmd
 
 
+def test_build_extract_preview_cmd_can_start_later():
+    cmd = build_extract_preview_cmd(Path("source.mkv"), Path("preview.wav"), start=31.25)
+    assert "-ss" in cmd
+    assert "31.250" in cmd
+
+
 def test_build_mux_cmd_has_dual_audio_metadata_and_default_instrumental():
     cmd = build_mux_cmd(
         Path("source.mkv"),

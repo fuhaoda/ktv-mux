@@ -4,10 +4,10 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .commands import require_command, run_command
+from .commands import require_command, run_command, run_command_logged
 from .errors import KtvError
-from .jsonio import read_json
-from .lyrics import normalize_lyrics_text
+from .jsonio import read_json, write_json
+from .lyrics import lrc_text_to_alignment, normalize_lyrics_text
 from .models import Song
 from .paths import LibraryPaths, derive_song_id_from_source, is_url, normalize_song_id
 
@@ -32,6 +32,8 @@ def import_source(
     library: LibraryPaths,
     title: str | None = None,
     artist: str | None = None,
+    log_path: Path | None = None,
+    cancel_file: Path | None = None,
 ) -> Song:
     clean_id = normalize_song_id(song_id) if song_id else derive_song_id_from_source(path_or_url)
     library.ensure_song_dirs(clean_id)
@@ -39,7 +41,11 @@ def import_source(
 
     if is_url(path_or_url):
         require_command("yt-dlp")
-        run_command(build_ytdlp_cmd(path_or_url, raw_dir))
+        cmd = build_ytdlp_cmd(path_or_url, raw_dir)
+        if log_path is not None:
+            run_command_logged(cmd, log_path=log_path, cancel_file=cancel_file)
+        else:
+            run_command(cmd, cancel_file=cancel_file)
         source = _find_downloaded_source(library, clean_id)
     else:
         source_input = Path(path_or_url).expanduser()
@@ -98,6 +104,9 @@ def save_lyrics_text(library: LibraryPaths, song_id: str, lyrics_text: str, *, c
     path = library.lyrics_txt(clean_id)
     text = normalize_lyrics_text(lyrics_text) if clean else lyrics_text.rstrip()
     path.write_text(text + "\n", encoding="utf-8")
+    alignment = lrc_text_to_alignment(lyrics_text) if clean else {"lines": []}
+    if alignment.get("lines"):
+        write_json(library.alignment_json(clean_id), alignment)
 
     try:
         song = load_song(library, clean_id)
@@ -125,6 +134,9 @@ def delete_song(library: LibraryPaths, song_id: str) -> None:
             data = read_json(job_path, default={}) or {}
             if data.get("song_id") == clean_id:
                 job_path.unlink()
+                cancel_path = library.job_cancel_file(job_path.stem)
+                if cancel_path.exists():
+                    cancel_path.unlink()
 
 
 def song_summary(library: LibraryPaths, song_id: str) -> dict[str, Any]:
@@ -141,7 +153,9 @@ def song_summary(library: LibraryPaths, song_id: str) -> dict[str, Any]:
     summary["has_ass"] = library.lyrics_ass(song_id).exists()
     summary["has_mkv"] = library.final_mkv(song_id).exists()
     summary["has_audio_replaced_mkv"] = library.audio_replaced_mkv(song_id).exists()
-    summary["take_files"] = [path.name for path in sorted(library.takes_dir(song_id).glob("*")) if path.is_file()]
+    summary["take_files"] = [
+        path.name for path in sorted(library.takes_dir(song_id).glob("*")) if path.is_file() and path.name != "takes.json"
+    ]
     summary["track_previews"] = [
         path.name for path in sorted(library.previews_dir(song_id).glob("track-*.wav")) if path.is_file()
     ]

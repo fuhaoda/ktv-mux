@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import shutil
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,8 +18,11 @@ from .media import extract_mix, extract_preview, mux_ktv, probe_media, replace_a
 from .models import Song, append_stage_status, update_report, utc_now
 from .paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
 from .quality import separation_quality_report
+from .versions import record_take
 
 StageFunc = Callable[[], Any]
+_LOCKS_GUARD = threading.Lock()
+_SONG_LOCKS: dict[str, threading.Lock] = {}
 
 
 class Pipeline:
@@ -32,17 +36,19 @@ class Pipeline:
         song_id: str | None = None,
         title: str | None = None,
         artist: str | None = None,
+        cancel_file: Path | None = None,
     ) -> Song:
         stage_id = song_id or derive_song_id_from_source(path_or_url)
         return self._run_stage(
             stage_id,
             "import",
-            lambda: import_source(
+            lambda: _import_and_report(
+                self.library,
                 path_or_url,
                 song_id=song_id,
-                library=self.library,
                 title=title,
                 artist=artist,
+                cancel_file=cancel_file,
             ),
         )
 
@@ -76,14 +82,14 @@ class Pipeline:
 
         return self._run_stage(clean_id, "probe", stage)
 
-    def extract(self, song_id: str, *, audio_index: int = 0) -> Path:
+    def extract(self, song_id: str, *, audio_index: int = 0, cancel_file: Path | None = None) -> Path:
         clean_id = normalize_song_id(song_id)
         source = self.library.source_path(clean_id)
         mix = self.library.mix_wav(clean_id)
 
         def stage() -> Path:
             _validate_audio_index(source, audio_index)
-            result = extract_mix(source, mix, audio_index=audio_index)
+            result = extract_mix(source, mix, audio_index=audio_index, cancel_file=cancel_file)
             update_report(
                 self.library.report_json(clean_id),
                 mix_wav=str(result),
@@ -94,7 +100,14 @@ class Pipeline:
 
         return self._run_stage(clean_id, "extract", stage)
 
-    def preview_tracks(self, song_id: str, *, duration: float = 20.0) -> dict[str, Any]:
+    def preview_tracks(
+        self,
+        song_id: str,
+        *,
+        duration: float = 20.0,
+        start: float = 0.0,
+        cancel_file: Path | None = None,
+    ) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
         source = self.library.source_path(clean_id)
 
@@ -104,12 +117,14 @@ class Pipeline:
             previews = []
             for audio_index, stream in enumerate(info["audio_streams"]):
                 out = self.library.track_preview_wav(clean_id, audio_index)
-                extract_preview(source, out, audio_index=audio_index, duration=duration)
+                extract_preview(source, out, audio_index=audio_index, duration=duration, start=start, cancel_file=cancel_file)
                 previews.append(
                     {
                         "audio_index": audio_index,
                         "track": audio_index + 1,
                         "path": str(out),
+                        "start": start,
+                        "duration": duration,
                         "codec": stream.get("codec_name"),
                         "language": (stream.get("tags") or {}).get("language"),
                     }
@@ -130,7 +145,7 @@ class Pipeline:
 
         return self._run_stage(clean_id, "preview-tracks", stage)
 
-    def separate(self, song_id: str, *, model: str = "htdemucs") -> dict[str, Any]:
+    def separate(self, song_id: str, *, model: str = "htdemucs", cancel_file: Path | None = None) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
         mix = self._require_file(self.library.mix_wav(clean_id), "Run extract before separate.")
 
@@ -142,6 +157,7 @@ class Pipeline:
                 self.library.vocals_wav(clean_id),
                 model=model,
                 log_path=self.library.stage_log(clean_id, "separate"),
+                cancel_file=cancel_file,
             )
             update_report(
                 self.library.report_json(clean_id),
@@ -247,6 +263,7 @@ class Pipeline:
         *,
         duration_limit: float | None = None,
         audio_order: str = "instrumental-first",
+        cancel_file: Path | None = None,
     ) -> Path:
         clean_id = normalize_song_id(song_id)
         source = self.library.source_path(clean_id)
@@ -267,6 +284,7 @@ class Pipeline:
                 output,
                 duration_limit=duration_limit,
                 audio_order=audio_order,
+                cancel_file=cancel_file,
             )
             update_report(
                 self.library.report_json(clean_id),
@@ -285,6 +303,7 @@ class Pipeline:
         keep_audio_index: int = 0,
         copy_subtitles: bool = True,
         duration_limit: float | None = None,
+        cancel_file: Path | None = None,
     ) -> Path:
         clean_id = normalize_song_id(song_id)
         source = self.library.source_path(clean_id)
@@ -303,6 +322,7 @@ class Pipeline:
                 keep_audio_index=keep_audio_index,
                 copy_subtitles=copy_subtitles,
                 duration_limit=duration_limit,
+                cancel_file=cancel_file,
             )
             update_report(
                 self.library.report_json(clean_id),
@@ -343,13 +363,19 @@ class Pipeline:
 
         return self._run_stage(clean_id, "clean-work", stage)
 
-    def process(self, song_id: str, *, align_backend: str = "auto") -> dict[str, Any]:
+    def process(
+        self,
+        song_id: str,
+        *,
+        align_backend: str = "auto",
+        cancel_file: Path | None = None,
+    ) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
         self.probe(clean_id)
-        self.extract(clean_id)
-        self.separate(clean_id)
+        self.extract(clean_id, cancel_file=cancel_file)
+        self.separate(clean_id, cancel_file=cancel_file)
         self.align(clean_id, backend=align_backend)
-        final = self.mux(clean_id)
+        final = self.mux(clean_id, cancel_file=cancel_file)
         return {"song_id": clean_id, "final_mkv": str(final)}
 
     def batch(self, *, raw_root: Path | None = None, align_backend: str = "auto") -> list[dict[str, Any]]:
@@ -411,6 +437,47 @@ def _probe_duration(path: Path) -> float:
     return float(info.get("duration") or 0.0)
 
 
+def _import_and_report(
+    library: LibraryPaths,
+    path_or_url: str,
+    *,
+    song_id: str | None,
+    title: str | None,
+    artist: str | None,
+    cancel_file: Path | None,
+) -> Song:
+    clean_id = normalize_song_id(song_id) if song_id else derive_song_id_from_source(path_or_url)
+    song = import_source(
+        path_or_url,
+        song_id=song_id,
+        library=library,
+        title=title,
+        artist=artist,
+        log_path=library.stage_log(clean_id, "import"),
+        cancel_file=cancel_file,
+    )
+    update_report(
+        library.report_json(song.song_id),
+        imported_source=str(song.source_path),
+        import_input=path_or_url,
+        download_metadata=_download_metadata(library, song.song_id),
+    )
+    return song
+
+
+def _download_metadata(library: LibraryPaths, song_id: str) -> dict[str, Any] | None:
+    for path in sorted(library.raw_dir(song_id).glob("source*.info.json")):
+        data = read_json(path, default={})
+        if not isinstance(data, dict):
+            continue
+        return {
+            key: data.get(key)
+            for key in ["id", "title", "uploader", "channel", "webpage_url", "duration", "extractor"]
+            if data.get(key) is not None
+        }
+    return None
+
+
 def _validate_audio_index(source: Path, audio_index: int) -> None:
     if audio_index < 0:
         raise PipelineStateError("Audio track index must be 0 or greater.")
@@ -436,6 +503,7 @@ def _archive_take(library: LibraryPaths, song_id: str, path: Path) -> Path:
     take = library.takes_dir(song_id) / f"{path.stem}.{stamp}{path.suffix}"
     take.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, take)
+    record_take(library, song_id, take)
     return take
 
 
@@ -443,9 +511,21 @@ def _archive_take(library: LibraryPaths, song_id: str, path: Path) -> Path:
 def song_lock(library: LibraryPaths, song_id: str) -> Iterator[None]:
     path = library.lock_file(song_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+    inprocess = _inprocess_song_lock(song_id)
+    with inprocess:
+        with path.open("w", encoding="utf-8") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _inprocess_song_lock(song_id: str) -> threading.Lock:
+    clean_id = normalize_song_id(song_id)
+    with _LOCKS_GUARD:
+        lock = _SONG_LOCKS.get(clean_id)
+        if lock is None:
+            lock = threading.Lock()
+            _SONG_LOCKS[clean_id] = lock
+        return lock

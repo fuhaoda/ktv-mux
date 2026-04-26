@@ -44,13 +44,38 @@ def separation_quality_report(
     mix = analyze_wav(mix_wav)
     instrumental = analyze_wav(instrumental_wav)
     vocals = analyze_wav(vocals_wav)
-    return {
+    report = {
         "mix": mix,
         "instrumental": instrumental,
         "vocals": vocals,
         "instrumental_rms_delta_db": _delta(instrumental.get("rms_dbfs"), mix.get("rms_dbfs")),
         "vocals_rms_delta_db": _delta(vocals.get("rms_dbfs"), mix.get("rms_dbfs")),
     }
+    report["recommendations"] = quality_recommendations(report)
+    return report
+
+
+def quality_recommendations(report: dict[str, Any]) -> list[str]:
+    recommendations: list[str] = []
+    instrumental = report.get("instrumental") or {}
+    vocals = report.get("vocals") or {}
+    mix = report.get("mix") or {}
+    if _metric(instrumental, "clipped_ratio") > 0.001 or _metric(mix, "clipped_ratio") > 0.001:
+        recommendations.append("Clipping detected. Lower the source or stem gain before muxing.")
+    if _metric(instrumental, "silence_ratio") > 0.2:
+        recommendations.append("Instrumental contains long silence. Check that the selected source track is correct.")
+    instrumental_rms = instrumental.get("rms_dbfs")
+    if instrumental_rms is not None and float(instrumental_rms) < -30:
+        recommendations.append("Instrumental is very quiet. Consider normalizing or selecting another source track.")
+    vocals_delta = report.get("vocals_rms_delta_db")
+    instrumental_delta = report.get("instrumental_rms_delta_db")
+    if vocals_delta is not None and instrumental_delta is not None and float(vocals_delta) >= float(instrumental_delta):
+        recommendations.append("Vocal separation may be weak. Try another source track or Demucs model.")
+    if vocals.get("exists") is False or instrumental.get("exists") is False:
+        recommendations.append("One or more stem files are missing. Re-run separation before muxing.")
+    if not recommendations:
+        recommendations.append("No obvious level issues detected.")
+    return recommendations
 
 
 def _dbfs(value: int, full_scale: float) -> float | None:
@@ -63,6 +88,13 @@ def _delta(value: Any, base: Any) -> float | None:
     if value is None or base is None:
         return None
     return round(float(value) - float(base), 2)
+
+
+def _metric(data: dict[str, Any], key: str) -> float:
+    try:
+        return float(data.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _peak_and_rms(raw: bytes, sample_width: int) -> tuple[int, int]:

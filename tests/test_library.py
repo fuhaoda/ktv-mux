@@ -1,6 +1,6 @@
 from ktv_mux.alignment import generate_even_alignment
-from ktv_mux.jsonio import write_json
-from ktv_mux.library import delete_song, import_source, song_summary
+from ktv_mux.jsonio import read_json, write_json
+from ktv_mux.library import delete_song, import_source, save_lyrics_text, song_summary
 from ktv_mux.paths import LibraryPaths
 from ktv_mux.pipeline import Pipeline
 
@@ -43,14 +43,27 @@ def test_edit_subtitles_rebuilds_alignment_and_ass(tmp_path):
     assert "新" in library.lyrics_ass("song").read_text(encoding="utf-8")
 
 
+def test_save_lyrics_text_writes_lrc_alignment(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+
+    save_lyrics_text(library, "song", "[00:01.00]第一句\n[00:03.00]第二句")
+
+    assert library.lyrics_txt("song").read_text(encoding="utf-8") == "第一句\n第二句\n"
+    alignment = read_json(library.alignment_json("song"))
+    assert alignment["backend"] == "lrc"
+    assert alignment["lines"][0]["end"] == 3.0
+
+
 def test_delete_song_removes_library_folders(tmp_path):
     library = LibraryPaths(tmp_path / "library")
     library.ensure_song_dirs("song")
     library.jobs_root.mkdir(parents=True)
     library.job_json("abc").write_text('{"song_id": "song"}', encoding="utf-8")
+    library.job_cancel_file("abc").write_text("cancel", encoding="utf-8")
     delete_song(library, "song")
 
     assert not library.raw_dir("song").exists()
     assert not library.work_dir("song").exists()
     assert not library.output_dir("song").exists()
     assert not library.job_json("abc").exists()
+    assert not library.job_cancel_file("abc").exists()

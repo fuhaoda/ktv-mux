@@ -17,6 +17,21 @@ The first polished workflow is built around real KTV production:
 
 Use Python 3.12.
 
+One-click macOS path:
+
+```bash
+scripts/bootstrap_mac.sh
+scripts/ktv-start.command
+```
+
+To create a Desktop launcher:
+
+```bash
+scripts/install_macos_launcher.sh
+```
+
+Manual path:
+
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -35,7 +50,7 @@ http://127.0.0.1:8000
 ```bash
 ktv import assets/朋友-周华健.mkv
 ktv probe 朋友-周华健
-ktv preview-tracks 朋友-周华健
+ktv preview-tracks 朋友-周华健 --start 30 --duration 20
 ktv extract 朋友-周华健 --audio-index 0
 ktv separate 朋友-周华健
 ```
@@ -63,7 +78,7 @@ library/output/朋友-周华健/朋友-周华健.audio-replaced.mkv
 ```bash
 ktv import PATH_OR_URL [--song-id ID]
 ktv probe SONG_ID
-ktv preview-tracks SONG_ID
+ktv preview-tracks SONG_ID [--start SECONDS] [--duration SECONDS]
 ktv extract SONG_ID --audio-index 0
 ktv separate SONG_ID
 ktv replace-audio SONG_ID --keep-audio-index 0
@@ -73,6 +88,10 @@ ktv shift SONG_ID --seconds 0.35
 ktv edit-line SONG_ID --index 0 --start 10.2 --end 13.4 --text "第一句歌词"
 ktv mux SONG_ID
 ktv clean-work SONG_ID
+ktv takes SONG_ID
+ktv take-note SONG_ID FILENAME --label "good" --note "less vocal bleed"
+ktv take-current SONG_ID FILENAME
+ktv take-delete SONG_ID FILENAME
 ktv delete SONG_ID
 ktv status SONG_ID
 ktv doctor [SONG_ID]
@@ -110,7 +129,9 @@ KTV_RUN_SLOW=1 .venv/bin/python -m pytest -q -m slow
 - `ffmpeg`, `ffprobe`, and `yt-dlp` are external command dependencies.
 - Demucs model weights download on first use.
 - Long-running Web stages use a local file-backed job queue under `library/jobs`.
+- Running Web jobs can be canceled; supported subprocesses receive a cancel signal through `library/jobs/{job_id}.cancel`.
 - Demucs logs are written under `library/work/{song_id}/logs/separate.log`.
+- URL download logs are written under `library/work/{song_id}/logs/import.log`.
 - Source track previews are written under `library/work/{song_id}/track-previews`.
 - Each generated audio or MKV output also keeps a versioned copy under `library/output/{song_id}/takes`.
 - Generated media under `library/` is ignored by git.

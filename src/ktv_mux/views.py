@@ -2,104 +2,23 @@ from __future__ import annotations
 
 import json
 from html import escape
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from .paths import normalize_song_id
 
+_BASE_TEMPLATE = Path(__file__).with_name("templates") / "base.html"
+
 
 def page(title: str, body: str, *, auto_refresh: bool = False) -> str:
     refresh = '<meta http-equiv="refresh" content="3">' if auto_refresh else ""
-    return f"""<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  {refresh}
-  <title>{escape(title)} - ktv-mux</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --bg: #f4f6f8;
-      --ink: #17202a;
-      --muted: #637083;
-      --panel: #ffffff;
-      --line: #d9e0ea;
-      --accent: #0b63ce;
-      --accent-ink: #ffffff;
-      --ok: #147a50;
-      --warn: #a16100;
-      --bad: #b42318;
-      --soft: #eef4ff;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; background: var(--bg); color: var(--ink); }}
-    header {{ background: #111a24; color: white; border-bottom: 4px solid #2f80ed; }}
-    .topbar {{ max-width: 1180px; margin: 0 auto; padding: 16px 22px; display: flex; justify-content: space-between; gap: 16px; align-items: center; }}
-    .brand {{ font-size: 21px; font-weight: 760; letter-spacing: 0; }}
-    .subtle {{ color: var(--muted); font-size: 13px; }}
-    header .subtle {{ color: #b8c7d9; }}
-    main {{ max-width: 1180px; margin: 0 auto; padding: 22px; }}
-    h1 {{ font-size: 28px; line-height: 1.15; margin: 0 0 4px; letter-spacing: 0; }}
-    h2 {{ font-size: 17px; margin: 0 0 12px; letter-spacing: 0; }}
-    h3 {{ font-size: 14px; margin: 0 0 8px; color: #2b3543; letter-spacing: 0; }}
-    a {{ color: var(--accent); text-decoration: none; }}
-    a:hover {{ text-decoration: underline; }}
-    table {{ width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); }}
-    th, td {{ border-bottom: 1px solid #e6ebf1; padding: 11px 12px; text-align: left; font-size: 14px; vertical-align: middle; }}
-    th {{ color: #344154; background: #f9fbfd; font-weight: 680; }}
-    form {{ margin: 0; }}
-    label {{ display: block; font-size: 13px; color: #39465a; margin: 0 0 5px; }}
-    input, textarea, select {{ width: 100%; padding: 9px 10px; border: 1px solid #c9d3e1; border-radius: 6px; background: white; color: var(--ink); font: inherit; }}
-    textarea {{ min-height: 170px; resize: vertical; }}
-    button, .button {{ display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 8px 12px; border: 1px solid #0a59b8; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 650; cursor: pointer; text-decoration: none; white-space: nowrap; }}
-    button.secondary, .button.secondary {{ background: white; color: #16436f; border-color: #aebbd0; }}
-    button.danger, .button.danger {{ background: var(--bad); border-color: var(--bad); color: white; }}
-    .hero {{ display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }}
-    .panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }}
-    .stack {{ display: grid; gap: 16px; }}
-    .tight {{ display: grid; gap: 10px; }}
-    .grid-2 {{ display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(330px, 0.95fr); gap: 16px; align-items: start; }}
-    .grid-3 {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
-    .row {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
-    .fields {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
-    .field-wide {{ grid-column: 1 / -1; }}
-    .number-input {{ width: 130px; }}
-    .steps {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }}
-    .step {{ border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fbfcfe; display: grid; gap: 10px; align-content: start; }}
-    .step strong {{ font-size: 14px; }}
-    .flag, .badge {{ display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid #ccd7e5; border-radius: 999px; background: white; color: #2f3c4f; font-size: 12px; font-weight: 620; }}
-    .badge.ok {{ border-color: #97d4b5; color: var(--ok); background: #effaf4; }}
-    .badge.warn {{ border-color: #f2c370; color: var(--warn); background: #fff8e8; }}
-    .badge.bad {{ border-color: #f0a7a0; color: var(--bad); background: #fff1f0; }}
-    .path {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; color: #324056; }}
-    pre {{ overflow: auto; background: #101820; color: #edf5ff; padding: 12px; border-radius: 8px; font-size: 12px; max-height: 340px; }}
-    audio {{ width: 100%; margin: 6px 0 8px; }}
-    .empty {{ border: 1px dashed #b8c4d6; border-radius: 8px; padding: 24px; color: var(--muted); background: #fbfcfe; }}
-    .compact {{ font-size: 13px; }}
-    .song-link {{ font-weight: 700; }}
-    .danger-zone {{ border-color: #f0b4ae; background: #fff8f7; }}
-    .metric {{ display: grid; grid-template-columns: minmax(120px, 0.8fr) repeat(4, minmax(70px, 1fr)); gap: 8px; align-items: center; font-size: 13px; border-bottom: 1px solid #e6ebf1; padding: 7px 0; }}
-    .metric:first-child {{ color: #344154; font-weight: 700; }}
-    .progress {{ height: 8px; background: #dce5f1; border-radius: 999px; overflow: hidden; min-width: 90px; }}
-    .progress > span {{ display: block; height: 100%; background: var(--accent); }}
-    .mini-form {{ display: inline; }}
-    .track-grid {{ display: grid; grid-template-columns: minmax(90px, 0.7fr) minmax(180px, 1.3fr) minmax(180px, 1fr); gap: 10px; align-items: center; border-bottom: 1px solid #e6ebf1; padding: 10px 0; }}
-    .alignment-row {{ display: grid; grid-template-columns: 72px 90px 90px minmax(180px, 1fr); gap: 8px; align-items: center; }}
-    @media (max-width: 920px) {{
-      .grid-2, .grid-3, .steps, .fields, .metric, .track-grid, .alignment-row {{ grid-template-columns: 1fr; }}
-      .hero {{ align-items: flex-start; flex-direction: column; }}
-      main, .topbar {{ padding-left: 14px; padding-right: 14px; }}
-      .number-input {{ width: 100%; }}
-    }}
-  </style>
-</head>
-<body>
-  <header><div class="topbar"><div><div class="brand">ktv-mux</div><div class="subtle">Local KTV MKV workshop</div></div><div class="row"><a class="button secondary" href="/doctor">Doctor</a><a class="button secondary" href="/">Songs</a></div></div></header>
-  <main>{body}</main>
-</body>
-</html>"""
+    template = _BASE_TEMPLATE.read_text(encoding="utf-8")
+    return (
+        template.replace("{{ refresh }}", refresh)
+        .replace("{{ title }}", escape(title))
+        .replace("{{ body }}", body)
+    )
 
 
 def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str:
@@ -170,14 +89,17 @@ def render_detail(
     logs: list[str],
     jobs: list[dict[str, Any]],
     doctor: dict[str, Any],
+    takes: list[dict[str, Any]],
 ) -> str:
     state = status.get("state") or "idle"
-    state_class = "ok" if state == "completed" else "warn" if state in {"running", "queued"} else "bad" if state == "failed" else ""
+    state_class = (
+        "ok" if state == "completed" else "warn" if state in {"running", "queued", "canceling"} else "bad" if state == "failed" else ""
+    )
     current_stage = status.get("current_stage") or "none"
     selected_index = int((report or {}).get("selected_audio_index") or 0)
     keep_audio_index = int((report or {}).get("kept_audio_index") or 0)
     audio_blocks = render_audio_blocks(song_id, summary)
-    output_blocks = render_outputs(song_id, summary, report)
+    output_blocks = render_outputs(song_id, summary, report, takes)
     return f"""
 <section class="hero">
   <div>
@@ -203,6 +125,10 @@ def render_detail(
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/preview-tracks">
           <strong>Preview Tracks</strong>
+          <label>Start seconds</label>
+          <input name="preview_start" type="number" step="1" min="0" value="0">
+          <label>Duration</label>
+          <input name="preview_duration" type="number" step="1" min="3" value="20">
           <button type="submit">Build Previews</button>
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/separate">
@@ -360,6 +286,7 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
     return f"""
       <div class="tight" style="margin-top:14px;">
         <h3>Subtitle Timing</h3>
+        <img class="waveform" src="{song_url(song_id)}/waveform.svg" alt="Audio waveform">
         <form method="post" action="{song_url(song_id)}/alignment" class="tight">
           <input type="hidden" name="line_count" value="{min(len(lines), 24)}">
           {''.join(rows)}
@@ -370,7 +297,12 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
 """
 
 
-def render_outputs(song_id: str, summary: dict[str, Any], report: dict[str, Any]) -> str:
+def render_outputs(
+    song_id: str,
+    summary: dict[str, Any],
+    report: dict[str, Any],
+    takes: list[dict[str, Any]],
+) -> str:
     rows = []
     if summary.get("has_instrumental"):
         rows.append(output_row("Instrumental WAV", f"{song_url(song_id)}/download/instrumental", "instrumental.wav"))
@@ -378,8 +310,8 @@ def render_outputs(song_id: str, summary: dict[str, Any], report: dict[str, Any]
         rows.append(output_row("Audio-Replaced MKV", f"{song_url(song_id)}/download/audio-replaced-mkv", "new instrumental as Track 2"))
     if summary.get("has_mkv"):
         rows.append(output_row("KTV MKV", f"{song_url(song_id)}/download/ktv-mkv", "dual audio + ASS"))
-    for take in summary.get("take_files") or []:
-        rows.append(output_row("Saved Take", f"{song_url(song_id)}/download/take/{quote(str(take), safe='')}", str(take)))
+    for take in takes:
+        rows.append(render_take_row(song_id, take))
     if not rows:
         return "<div class='empty'>No outputs yet.</div>"
     latest = []
@@ -393,6 +325,32 @@ def render_outputs(song_id: str, summary: dict[str, Any], report: dict[str, Any]
 
 def output_row(label: str, href: str, detail: str) -> str:
     return f"<div><div><strong>{escape(label)}</strong></div><div class='subtle'>{escape(detail)}</div><a class='button secondary' href='{href}'>Download</a></div>"
+
+
+def render_take_row(song_id: str, take: dict[str, Any]) -> str:
+    filename = str(take.get("filename") or "")
+    encoded = quote(filename, safe="")
+    current = "<span class='badge ok'>current</span>" if take.get("is_current") else ""
+    return f"""
+<div class="take-row">
+  <div class="row"><strong>Saved Take</strong>{current}<span class="badge">{escape(str(take.get("kind") or ""))}</span></div>
+  <div class="path">{escape(filename)}</div>
+  <form method="post" action="{song_url(song_id)}/take/{encoded}/update" class="tight">
+    <div class="take-meta">
+      <div><label>Label</label><input name="label" value="{escape(str(take.get("label") or ""))}"></div>
+      <div><label>Note</label><input name="note" value="{escape(str(take.get("note") or ""))}"></div>
+    </div>
+    <div class="row">
+      <button class="secondary" type="submit">Save Note</button>
+      <a class="button secondary" href="{song_url(song_id)}/download/take/{encoded}">Download</a>
+    </div>
+  </form>
+  <div class="row">
+    <form class="mini-form" method="post" action="{song_url(song_id)}/take/{encoded}/set-current"><button class="secondary" type="submit">Set Current</button></form>
+    <form class="mini-form" method="post" action="{song_url(song_id)}/take/{encoded}/delete"><button class="danger" type="submit">Delete</button></form>
+  </div>
+</div>
+"""
 
 
 def render_quality(report: dict[str, Any]) -> str:
@@ -418,6 +376,13 @@ def render_quality(report: dict[str, Any]) -> str:
         f"vocals RMS delta: {fmt(quality.get('vocals_rms_delta_db'))}; "
         f"instrumental silence: {fmt_percent((quality.get('instrumental') or {}).get('silence_ratio'))}</div>"
     )
+    recommendations = quality.get("recommendations") or []
+    if recommendations:
+        rows.append(
+            "<div class='tight'>"
+            + "".join(f"<div class='badge warn'>{escape(str(item))}</div>" for item in recommendations)
+            + "</div>"
+        )
     return "<div class='tight'>" + "".join(rows) + "</div>"
 
 
@@ -428,7 +393,9 @@ def render_status(status: dict[str, Any]) -> str:
     rows = []
     for item in history[-8:]:
         state = str(item.get("state") or "")
-        state_class = "ok" if state == "completed" else "warn" if state in {"running", "queued"} else "bad" if state == "failed" else ""
+        state_class = (
+            "ok" if state == "completed" else "warn" if state in {"running", "queued", "canceling"} else "bad" if state == "failed" else ""
+        )
         rows.append(
             f"<tr><td>{escape(str(item.get('time') or ''))}</td><td>{escape(str(item.get('stage') or ''))}</td>"
             f"<td><span class='badge {state_class}'>{escape(state)}</span></td><td class='compact'>{escape(trim(str(item.get('message') or ''), 160))}</td></tr>"
@@ -442,7 +409,9 @@ def render_jobs(jobs: list[dict[str, Any]]) -> str:
     rows = []
     for job in jobs:
         state = str(job.get("state") or "")
-        state_class = "ok" if state == "completed" else "warn" if state in {"running", "queued"} else "bad" if state == "failed" else ""
+        state_class = (
+            "ok" if state == "completed" else "warn" if state in {"running", "queued", "canceling"} else "bad" if state == "failed" else ""
+        )
         progress = int(job.get("progress") or 0)
         actions = render_job_actions(job)
         rows.append(
@@ -460,7 +429,7 @@ def render_jobs(jobs: list[dict[str, Any]]) -> str:
 def render_job_actions(job: dict[str, Any]) -> str:
     job_id = escape(str(job.get("job_id") or ""))
     state = str(job.get("state") or "")
-    if state == "queued":
+    if state in {"queued", "running", "canceling"}:
         return f"<form class='mini-form' method='post' action='/jobs/{job_id}/cancel'><button class='secondary' type='submit'>Cancel</button></form>"
     if state in {"failed", "canceled"}:
         return f"<form class='mini-form' method='post' action='/jobs/{job_id}/retry'><button class='secondary' type='submit'>Retry</button></form>"

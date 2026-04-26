@@ -12,6 +12,7 @@ from .jsonio import read_json
 from .library import delete_song, song_summary
 from .paths import LibraryPaths
 from .pipeline import Pipeline
+from .versions import delete_take, list_takes, set_current_take, update_take
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     preview_p = sub.add_parser("preview-tracks", help="extract short previews for every source audio track")
     preview_p.add_argument("song_id")
+    preview_p.add_argument("--start", type=float, default=0.0, help="preview start offset in seconds")
     preview_p.add_argument("--duration", type=float, default=20.0)
 
     separate_p = sub.add_parser("separate", help="separate vocals from accompaniment")
@@ -99,6 +101,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     clean_p = sub.add_parser("clean-work", help="remove regenerable work files for one song")
     clean_p.add_argument("song_id")
+
+    takes_p = sub.add_parser("takes", help="list saved output takes for one song")
+    takes_p.add_argument("song_id")
+
+    take_note_p = sub.add_parser("take-note", help="edit a saved output take label/note")
+    take_note_p.add_argument("song_id")
+    take_note_p.add_argument("filename")
+    take_note_p.add_argument("--label", default="")
+    take_note_p.add_argument("--note", default="")
+
+    take_current_p = sub.add_parser("take-current", help="promote a saved take to the stable output filename")
+    take_current_p.add_argument("song_id")
+    take_current_p.add_argument("filename")
+
+    take_delete_p = sub.add_parser("take-delete", help="delete a saved output take")
+    take_delete_p.add_argument("song_id")
+    take_delete_p.add_argument("filename")
 
     delete_p = sub.add_parser("delete", help="delete raw/work/output folders for one song")
     delete_p.add_argument("song_id")
@@ -161,7 +180,7 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
     if args.command == "extract":
         return {"mix_wav": str(pipeline.extract(args.song_id, audio_index=args.audio_index))}
     if args.command == "preview-tracks":
-        return pipeline.preview_tracks(args.song_id, duration=args.duration)
+        return pipeline.preview_tracks(args.song_id, duration=args.duration, start=args.start)
     if args.command == "separate":
         return pipeline.separate(args.song_id, model=args.model)
     if args.command == "align":
@@ -199,6 +218,16 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
         }
     if args.command == "clean-work":
         return pipeline.clean_work(args.song_id)
+    if args.command == "takes":
+        return list_takes(library, args.song_id)
+    if args.command == "take-note":
+        update_take(library, args.song_id, args.filename, label=args.label, note=args.note)
+        return {"updated": args.filename}
+    if args.command == "take-current":
+        return {"current": str(set_current_take(library, args.song_id, args.filename))}
+    if args.command == "take-delete":
+        delete_take(library, args.song_id, args.filename)
+        return {"deleted": args.filename}
     if args.command == "delete":
         delete_song(library, args.song_id)
         return {"deleted": args.song_id}

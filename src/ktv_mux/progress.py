@@ -7,6 +7,7 @@ from typing import Any
 from .paths import LibraryPaths
 
 _PERCENT_RE = re.compile(r"(\d{1,3})%\|")
+_YTDLP_PERCENT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)%")
 
 
 def estimate_stage_progress(library: LibraryPaths, song_id: str, stage: str, state: str) -> int:
@@ -18,7 +19,9 @@ def estimate_stage_progress(library: LibraryPaths, song_id: str, stage: str, sta
         return 0
     if stage == "separate":
         return demucs_log_progress(library.stage_log(song_id, "separate"))
-    return 50 if state == "running" else 0
+    if stage in {"import", "import-url"}:
+        return ytdlp_log_progress(library.stage_log(song_id, "import"))
+    return 50 if state in {"running", "canceling"} else 0
 
 
 def demucs_log_progress(log_path: Path) -> int:
@@ -29,6 +32,16 @@ def demucs_log_progress(log_path: Path) -> int:
     if not matches:
         return 5
     return max(0, min(99, int(matches[-1])))
+
+
+def ytdlp_log_progress(log_path: Path) -> int:
+    if not log_path.exists():
+        return 5
+    text = log_path.read_text(encoding="utf-8", errors="replace")[-20000:]
+    matches = _YTDLP_PERCENT_RE.findall(text)
+    if not matches:
+        return 10
+    return max(0, min(99, int(float(matches[-1]))))
 
 
 def annotate_jobs_with_progress(library: LibraryPaths, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:

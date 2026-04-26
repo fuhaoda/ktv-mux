@@ -42,7 +42,7 @@ Run probe, generate previews, listen, then choose another track:
 
 ```bash
 ktv probe SONG_ID
-ktv preview-tracks SONG_ID
+ktv preview-tracks SONG_ID --start 30 --duration 20
 ktv extract SONG_ID --audio-index 1
 ktv separate SONG_ID
 ```
@@ -59,7 +59,17 @@ library/work/{song_id}/logs/separate.log
 
 The song detail page links to the same log after separation starts. First runs can be slow because Demucs downloads model weights.
 
-Queued jobs can be canceled from the Web job table. Failed jobs can be retried from the same table.
+Queued and running jobs can be canceled from the Web job table. Failed or canceled jobs can be retried from the same table. If cancellation is requested, the app writes `library/jobs/{job_id}.cancel` and supported subprocesses terminate cleanly.
+
+## URL Download Fails
+
+Open the import log:
+
+```text
+library/work/{song_id}/logs/import.log
+```
+
+The Web page links this log after URL import starts. The app does not bypass platform restrictions or copyright controls; use only URLs you have the right to process.
 
 ## Subtitles Are Early Or Late
 
@@ -82,6 +92,23 @@ The latest files keep stable names, but every generated audio/MKV output is copi
 
 ```text
 library/output/{song_id}/takes/
+```
+
+Use the Web Outputs panel to label takes, add notes, delete bad takes, or set an older take as current.
+
+## One-Click Startup Does Not Open
+
+macOS may require executable permission:
+
+```bash
+chmod +x scripts/*.sh scripts/*.command
+scripts/ktv-start.command
+```
+
+To recreate the Desktop launcher:
+
+```bash
+scripts/install_macos_launcher.sh
 ```
 
 ## Web Server Port Already In Use
