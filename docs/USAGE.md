@@ -31,6 +31,7 @@ Open `http://127.0.0.1:8000`.
 
 ```bash
 .venv/bin/ktv import assets/朋友-周华健.mkv
+.venv/bin/ktv metadata 朋友-周华健 --title "朋友" --artist "周华健"
 .venv/bin/ktv probe 朋友-周华健
 .venv/bin/ktv preview-tracks 朋友-周华健 --start 30 --duration 20
 .venv/bin/ktv extract 朋友-周华健 --audio-index 0
@@ -55,6 +56,14 @@ ktv extract 朋友-周华健 --audio-index 1  # Web Track 2
 ```
 
 Before extracting, use `preview-tracks` or the Web `Preview Tracks` button to create playable clips for every source audio track. `--start` is useful when the first seconds are silence, applause, or an intro.
+
+Set defaults used by the Web forms:
+
+```bash
+ktv settings --preview-start 30 --preview-duration 20 --worker-count 2 --auto-refresh-seconds 3
+```
+
+The Web Settings page exposes the same values. Worker count applies when the Web app starts.
 
 ## Replace Track 2 With A Generated Instrumental
 
@@ -95,6 +104,20 @@ ktv take-note 朋友-周华健 instrumental.20260425T010101Z.wav --label "good t
 ktv take-current 朋友-周华健 instrumental.20260425T010101Z.wav
 ktv take-delete 朋友-周华健 instrumental.20260425T010101Z.wav
 ```
+
+Export a review package:
+
+```bash
+ktv export 朋友-周华健
+```
+
+Output:
+
+```text
+library/output/朋友-周华健/朋友-周华健.package.zip
+```
+
+The package includes current outputs, reports, lyrics/subtitles, alignment, and saved takes.
 
 ## Full KTV MKV With Lyrics
 
@@ -137,7 +160,26 @@ library/work/{song_id}/alignment.json
 
 ## Jobs And Diagnostics
 
-The Web UI has a local job drawer with progress bars, queued/running-job cancel, and failed/canceled-job retry. Demucs progress is estimated from `separate.log`; URL download progress is estimated from `import.log`.
+The Web UI has a local job drawer with progress bars, queued/running-job cancel, failed/canceled-job retry, and finished-job pruning. Demucs progress is estimated from `separate.log`; URL download progress is estimated from `import.log`.
+
+CLI job inspection:
+
+```bash
+ktv jobs
+ktv jobs-prune
+```
+
+Next-action hints:
+
+```bash
+ktv next 朋友-周华健
+```
+
+Batch import local files:
+
+```bash
+ktv import-many ~/Movies/song1.mkv ~/Movies/song2.mkv
+```
 
 Run local diagnostics:
 

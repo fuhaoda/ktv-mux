@@ -96,6 +96,38 @@ library/output/{song_id}/takes/
 
 Use the Web Outputs panel to label takes, add notes, delete bad takes, or set an older take as current.
 
+## Need A Short Test MKV
+
+Use duration limits to avoid waiting on a full-song mux:
+
+```bash
+ktv replace-audio SONG_ID --keep-audio-index 0 --duration-limit 30
+ktv mux SONG_ID --duration-limit 30
+```
+
+The Web replace/mux forms expose the same optional seconds field.
+
+## Job List Is Too Noisy
+
+Finished jobs can be removed without touching song files:
+
+```bash
+ktv jobs
+ktv jobs-prune
+```
+
+The Web home page also has `Prune Finished Jobs`.
+
+## Web Defaults Feel Wrong
+
+Change defaults from CLI:
+
+```bash
+ktv settings --preview-start 30 --preview-duration 20 --worker-count 2 --auto-refresh-seconds 3
+```
+
+or open `/settings` in the Web UI. Worker count takes effect after restarting the Web server.
+
 ## One-Click Startup Does Not Open
 
 macOS may require executable permission:

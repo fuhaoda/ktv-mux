@@ -121,6 +121,22 @@ class LocalJobRunner:
         jobs.sort(key=lambda job: job.created_at, reverse=True)
         return jobs[:limit]
 
+    def prune_jobs(self, *, states: set[str] | None = None) -> int:
+        removable = states or {"completed", "failed", "canceled"}
+        removed = 0
+        if not self.library.jobs_root.exists():
+            return removed
+        for path in self.library.jobs_root.glob("*.json"):
+            data = read_json(path, default=None)
+            if not isinstance(data, dict) or data.get("state") not in removable:
+                continue
+            cancel_path = self.library.job_cancel_file(path.stem)
+            path.unlink()
+            if cancel_path.exists():
+                cancel_path.unlink()
+            removed += 1
+        return removed
+
     def _recover_jobs(self) -> None:
         for job in reversed(self.list_jobs(limit=1000)):
             if job.state == "canceling":
@@ -224,6 +240,7 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
         pipeline.mux(
             job.song_id,
             audio_order=str(params.get("audio_order", "instrumental-first")),
+            duration_limit=_float_or_none(params.get("duration_limit")),
             cancel_file=cancel_file,
         )
     elif job.stage == "replace-audio":
@@ -231,6 +248,7 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
             job.song_id,
             keep_audio_index=int(params.get("keep_audio_index", 0)),
             copy_subtitles=bool(params.get("copy_subtitles", True)),
+            duration_limit=_float_or_none(params.get("duration_limit")),
             cancel_file=cancel_file,
         )
     elif job.stage == "clean-work":
@@ -239,3 +257,10 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
         pipeline.process(job.song_id, align_backend=str(params.get("align_backend", "auto")), cancel_file=cancel_file)
     else:
         raise ValueError(f"unknown stage: {job.stage}")
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in {None, ""}:
+        return None
+    parsed = float(value)
+    return parsed if parsed > 0 else None

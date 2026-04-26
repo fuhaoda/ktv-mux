@@ -42,3 +42,18 @@ This pass addressed the next ten self-review items.
 8. URL imports run as background jobs with `import.log`, progress parsing, and saved download metadata when yt-dlp writes it.
 9. LRC timestamps are converted into an initial `alignment.json` when lyrics are saved.
 10. macOS bootstrap, startup, and Desktop launcher scripts provide a one-click local startup path.
+
+## Fourth Improvement Pass
+
+This pass addressed the next ten self-review items.
+
+1. Library-level settings now persist worker count, preview defaults, and Web refresh timing.
+2. CLI and Web can edit song title/artist metadata after import.
+3. Web upload supports multiple local media files in one selection.
+4. A next-action planner suggests the most useful next stage for each song.
+5. CLI exposes `jobs` for inspecting file-backed Web jobs.
+6. CLI and Web expose job pruning for completed, failed, and canceled jobs.
+7. CLI and Web expose mux duration limits for faster short-sample validation.
+8. `ktv export` and the Web Outputs panel can create a ZIP package with outputs, reports, lyrics, and takes.
+9. `ktv import-many` imports several local files in one command, using filenames as song IDs.
+10. Tests and docs now cover the new settings, planner, export, CLI, and Web management paths.

@@ -77,21 +77,28 @@ library/output/朋友-周华健/朋友-周华健.audio-replaced.mkv
 
 ```bash
 ktv import PATH_OR_URL [--song-id ID]
+ktv import-many FILE1 FILE2
+ktv metadata SONG_ID --title "Title" --artist "Artist"
 ktv probe SONG_ID
 ktv preview-tracks SONG_ID [--start SECONDS] [--duration SECONDS]
 ktv extract SONG_ID --audio-index 0
 ktv separate SONG_ID
-ktv replace-audio SONG_ID --keep-audio-index 0
+ktv replace-audio SONG_ID --keep-audio-index 0 [--duration-limit SECONDS]
 ktv lyrics SONG_ID lyrics.txt
 ktv align SONG_ID --backend simple
 ktv shift SONG_ID --seconds 0.35
 ktv edit-line SONG_ID --index 0 --start 10.2 --end 13.4 --text "第一句歌词"
-ktv mux SONG_ID
+ktv mux SONG_ID [--duration-limit SECONDS]
 ktv clean-work SONG_ID
 ktv takes SONG_ID
 ktv take-note SONG_ID FILENAME --label "good" --note "less vocal bleed"
 ktv take-current SONG_ID FILENAME
 ktv take-delete SONG_ID FILENAME
+ktv export SONG_ID
+ktv next SONG_ID
+ktv jobs
+ktv jobs-prune
+ktv settings [--preview-start 30 --preview-duration 20 --worker-count 2]
 ktv delete SONG_ID
 ktv status SONG_ID
 ktv doctor [SONG_ID]
@@ -130,9 +137,11 @@ KTV_RUN_SLOW=1 .venv/bin/python -m pytest -q -m slow
 - Demucs model weights download on first use.
 - Long-running Web stages use a local file-backed job queue under `library/jobs`.
 - Running Web jobs can be canceled; supported subprocesses receive a cancel signal through `library/jobs/{job_id}.cancel`.
+- Finished Web jobs can be pruned from the Web UI or with `ktv jobs-prune`.
 - Demucs logs are written under `library/work/{song_id}/logs/separate.log`.
 - URL download logs are written under `library/work/{song_id}/logs/import.log`.
 - Source track previews are written under `library/work/{song_id}/track-previews`.
 - Each generated audio or MKV output also keeps a versioned copy under `library/output/{song_id}/takes`.
+- `ktv export SONG_ID` creates `library/output/{song_id}/{song_id}.package.zip`.
 - Generated media under `library/` is ignored by git.
 - Only process media you have the right to use.

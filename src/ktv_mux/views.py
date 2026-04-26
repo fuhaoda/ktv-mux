@@ -11,8 +11,8 @@ from .paths import normalize_song_id
 _BASE_TEMPLATE = Path(__file__).with_name("templates") / "base.html"
 
 
-def page(title: str, body: str, *, auto_refresh: bool = False) -> str:
-    refresh = '<meta http-equiv="refresh" content="3">' if auto_refresh else ""
+def page(title: str, body: str, *, auto_refresh: bool = False, refresh_seconds: int = 3) -> str:
+    refresh = f'<meta http-equiv="refresh" content="{int(refresh_seconds)}">' if auto_refresh else ""
     template = _BASE_TEMPLATE.read_text(encoding="utf-8")
     return (
         template.replace("{{ refresh }}", refresh)
@@ -42,7 +42,7 @@ def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str
   <div class="panel">
     <h2>Choose File</h2>
     <form method="post" action="/import-upload" enctype="multipart/form-data" class="stack">
-      <div class="field-wide"><label>Source file</label><input name="file" type="file" required></div>
+      <div class="field-wide"><label>Source files</label><input name="files" type="file" multiple required></div>
       <div class="fields">
         <div><label>Song ID optional</label><input name="song_id" placeholder="defaults to filename"></div>
         <div><label>Artist optional</label><input name="artist"></div>
@@ -73,6 +73,7 @@ def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str
 </section>
 <section class="panel" style="margin-top:16px;">
   <h2>Recent Jobs</h2>
+  <form method="post" action="/jobs/prune" style="margin-bottom:10px;"><button class="secondary" type="submit">Prune Finished Jobs</button></form>
   {render_jobs(jobs)}
 </section>
 """
@@ -90,6 +91,8 @@ def render_detail(
     jobs: list[dict[str, Any]],
     doctor: dict[str, Any],
     takes: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+    settings: dict[str, Any],
 ) -> str:
     state = status.get("state") or "idle"
     state_class = (
@@ -100,6 +103,8 @@ def render_detail(
     keep_audio_index = int((report or {}).get("kept_audio_index") or 0)
     audio_blocks = render_audio_blocks(song_id, summary)
     output_blocks = render_outputs(song_id, summary, report, takes)
+    preview_start = fmt_attr(settings.get("preview_start"))
+    preview_duration = fmt_attr(settings.get("preview_duration"))
     return f"""
 <section class="hero">
   <div>
@@ -126,9 +131,9 @@ def render_detail(
         <form class="step" method="post" action="{song_url(song_id)}/run/preview-tracks">
           <strong>Preview Tracks</strong>
           <label>Start seconds</label>
-          <input name="preview_start" type="number" step="1" min="0" value="0">
+          <input name="preview_start" type="number" step="1" min="0" value="{preview_start}">
           <label>Duration</label>
-          <input name="preview_duration" type="number" step="1" min="3" value="20">
+          <input name="preview_duration" type="number" step="1" min="3" value="{preview_duration}">
           <button type="submit">Build Previews</button>
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/separate">
@@ -139,6 +144,8 @@ def render_detail(
           <strong>Replace Track 2</strong>
           <label>Keep original track</label>
           <select name="keep_audio_index">{render_audio_options(report, keep_audio_index)}</select>
+          <label>Limit seconds optional</label>
+          <input name="duration_limit" type="number" step="1" min="1">
           <button type="submit">Build MKV</button>
         </form>
       </div>
@@ -172,6 +179,7 @@ def render_detail(
         </form>
         <form method="post" action="{song_url(song_id)}/run/mux">
           <input type="hidden" name="audio_order" value="instrumental-first">
+          <input class="number-input" name="duration_limit" type="number" step="1" min="1" placeholder="seconds">
           <button class="secondary" type="submit">Build KTV MKV</button>
         </form>
       </div>
@@ -179,6 +187,14 @@ def render_detail(
     </div>
   </div>
   <div class="stack">
+    <div class="panel">
+      <h2>Next Actions</h2>
+      {render_next_actions(song_id, actions)}
+    </div>
+    <div class="panel">
+      <h2>Metadata</h2>
+      {render_metadata_form(song_id, summary)}
+    </div>
     <div class="panel">
       <h2>Outputs</h2>
       {output_blocks}
@@ -242,6 +258,33 @@ def render_audio_blocks(song_id: str, summary: dict[str, Any]) -> str:
     if not blocks:
         return "<div class='empty'>No audio preview yet.</div>"
     return "".join(blocks)
+
+
+def render_next_actions(song_id: str, actions: list[dict[str, Any]]) -> str:
+    rows = []
+    runnable = {"probe", "preview-tracks", "extract", "separate", "align", "replace-audio", "mux"}
+    for action in actions:
+        stage = str(action.get("stage") or "")
+        label = escape(str(action.get("label") or stage))
+        reason = escape(str(action.get("reason") or ""))
+        button = ""
+        if stage in runnable:
+            button = (
+                f"<form method='post' action='{song_url(song_id)}/run/{escape(stage)}'>"
+                f"<button class='secondary' type='submit'>{label}</button></form>"
+            )
+        rows.append(f"<div class='tight'><div><strong>{label}</strong></div><div class='subtle'>{reason}</div>{button}</div>")
+    return "<div class='tight'>" + "".join(rows) + "</div>"
+
+
+def render_metadata_form(song_id: str, summary: dict[str, Any]) -> str:
+    return f"""
+<form method="post" action="{song_url(song_id)}/metadata" class="tight">
+  <div><label>Title</label><input name="title" value="{escape(str(summary.get("title") or ""))}"></div>
+  <div><label>Artist</label><input name="artist" value="{escape(str(summary.get("artist") or ""))}"></div>
+  <div><button class="secondary" type="submit">Save Metadata</button></div>
+</form>
+"""
 
 
 def render_track_panel(song_id: str, report: dict[str, Any]) -> str:
@@ -310,6 +353,8 @@ def render_outputs(
         rows.append(output_row("Audio-Replaced MKV", f"{song_url(song_id)}/download/audio-replaced-mkv", "new instrumental as Track 2"))
     if summary.get("has_mkv"):
         rows.append(output_row("KTV MKV", f"{song_url(song_id)}/download/ktv-mkv", "dual audio + ASS"))
+    if rows:
+        rows.append(output_row("Package ZIP", f"{song_url(song_id)}/export", "outputs, reports, lyrics, and takes"))
     for take in takes:
         rows.append(render_take_row(song_id, take))
     if not rows:
@@ -487,6 +532,25 @@ def render_doctor(doctor: dict[str, Any]) -> str:
 <section class="panel" style="margin-top:16px;">
   <h2>Library</h2>
   <pre>{escape(json_dump(doctor.get('library') or {}))}</pre>
+</section>
+"""
+
+
+def render_settings(settings: dict[str, Any]) -> str:
+    return f"""
+<section class="hero">
+  <div><h1>Settings</h1><div class="subtle">Local defaults for this library.</div></div>
+</section>
+<section class="panel">
+  <form method="post" action="/settings" class="stack">
+    <div class="fields">
+      <div><label>Worker count</label><input name="worker_count" type="number" min="1" value="{fmt_attr(settings.get("worker_count"))}"></div>
+      <div><label>Auto refresh seconds</label><input name="auto_refresh_seconds" type="number" min="1" value="{fmt_attr(settings.get("auto_refresh_seconds"))}"></div>
+      <div><label>Default preview start</label><input name="preview_start" type="number" min="0" step="1" value="{fmt_attr(settings.get("preview_start"))}"></div>
+      <div><label>Default preview duration</label><input name="preview_duration" type="number" min="1" step="1" value="{fmt_attr(settings.get("preview_duration"))}"></div>
+    </div>
+    <div><button type="submit">Save Settings</button></div>
+  </form>
 </section>
 """
 

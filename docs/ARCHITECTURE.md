@@ -12,6 +12,9 @@
 - `quality.py`: lightweight WAV duration and level metrics for separation review.
 - `progress.py`: stage progress estimation, especially Demucs log parsing.
 - `diagnostics.py`: local dependency and per-song failure diagnosis.
+- `planner.py`: next-action suggestions derived from current song files and reports.
+- `settings.py`: library-level defaults for Web workers, preview windows, and refresh cadence.
+- `exporter.py`: ZIP packaging for current outputs, reports, lyrics, and takes.
 - `pipeline.py`: stage orchestration and status/report writing.
 - `jobs.py`: file-backed local queue for long-running Web tasks.
 - `versions.py`: output take metadata, notes, delete, and set-current behavior.
@@ -26,6 +29,7 @@
 
 ```text
 library/
+  settings.json
   raw/{song_id}/
     source.mkv
     song.json
@@ -44,6 +48,7 @@ library/
     {song_id}.audio-replaced.mkv
     {song_id}.ktv.mkv
     report.json
+    {song_id}.package.zip
     takes/
       takes.json
   jobs/
@@ -67,10 +72,12 @@ library/
 
 ## Web Behavior
 
-Long-running stage buttons enqueue a file-backed local job and immediately return to the song page. On app startup, jobs left in `queued` or `running` state are recovered and queued again. Jobs run with a small worker pool so different songs can progress in parallel, while each song is still serialized by the per-song lock.
+Long-running stage buttons enqueue a file-backed local job and immediately return to the song page. On app startup, jobs left in `queued` or `running` state are recovered and queued again. Jobs run with a small worker pool configured by `settings.json`, so different songs can progress in parallel, while each song is still serialized by the per-song lock.
 
-Queued jobs and running jobs can be canceled. Running subprocesses receive a cancel file path; FFmpeg, yt-dlp, and Demucs wrappers monitor it and terminate the child process when requested. Failed/canceled jobs can be retried. Demucs progress is estimated from the stage log, and URL download progress is estimated from `import.log`.
+Queued jobs and running jobs can be canceled. Running subprocesses receive a cancel file path; FFmpeg, yt-dlp, and Demucs wrappers monitor it and terminate the child process when requested. Failed/canceled jobs can be retried, and finished jobs can be pruned. Demucs progress is estimated from the stage log, and URL download progress is estimated from `import.log`.
 
 Each pipeline stage takes a per-song file lock, so a user can click multiple actions without corrupting one song's working files. Failures are written to `status.json` and `report.json`; ordinary request failures render a friendly error page rather than a raw Internal Server Error.
 
 Outputs keep a stable "latest" file for normal use and a timestamped copy under `takes/` for comparison across models, source tracks, and subtitle edits. `takes.json` stores labels, notes, and which take is currently promoted back to the stable output filename.
+
+The Web detail page asks `planner.py` for next actions rather than hard-coding a single linear happy path. This keeps the UI flexible when a user only wants to preview tracks, replace audio, edit subtitles, or export a package.

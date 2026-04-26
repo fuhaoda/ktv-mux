@@ -139,8 +139,15 @@ class LibraryPaths:
     def job_cancel_file(self, job_id: str) -> Path:
         return self.jobs_root / f"{job_id}.cancel"
 
+    def settings_json(self) -> Path:
+        return self.root / "settings.json"
+
     def takes_json(self, song_id: str) -> Path:
         return self.takes_dir(song_id) / "takes.json"
+
+    def package_zip(self, song_id: str) -> Path:
+        clean_id = normalize_song_id(song_id)
+        return self.output_dir(clean_id) / f"{clean_id}.package.zip"
 
     def ensure_song_dirs(self, song_id: str) -> None:
         self.raw_dir(song_id).mkdir(parents=True, exist_ok=True)

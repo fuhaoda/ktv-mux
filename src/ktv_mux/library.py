@@ -86,6 +86,24 @@ def record_imported_source(
     return song
 
 
+def update_song_metadata(
+    library: LibraryPaths,
+    song_id: str,
+    *,
+    title: str | None = None,
+    artist: str | None = None,
+) -> Song:
+    clean_id = normalize_song_id(song_id)
+    try:
+        song = load_song(library, clean_id)
+    except FileNotFoundError:
+        song = Song(song_id=clean_id)
+    song.title = title if title is not None else song.title
+    song.artist = artist if artist is not None else song.artist
+    song.save(library.song_json(clean_id))
+    return song
+
+
 def _find_downloaded_source(library: LibraryPaths, song_id: str) -> Path:
     candidates = library.source_candidates(song_id)
     if not candidates:

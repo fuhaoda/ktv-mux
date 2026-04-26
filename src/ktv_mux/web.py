@@ -3,13 +3,25 @@ from pathlib import Path
 
 from .diagnostics import run_doctor
 from .errors import KtvError
+from .exporter import export_song_package
 from .jobs import LocalJobRunner
 from .jsonio import read_json
-from .library import delete_song, record_imported_source, save_lyrics_text, song_summary
+from .library import delete_song, record_imported_source, save_lyrics_text, song_summary, update_song_metadata
 from .paths import LibraryPaths, derive_song_id_from_source, is_url, normalize_song_id
 from .pipeline import Pipeline
+from .planner import next_actions
+from .settings import load_settings, save_settings
 from .versions import delete_take, list_takes, set_current_take, update_take
-from .views import page, render_delete_confirm, render_detail, render_doctor, render_error, render_index, song_url
+from .views import (
+    page,
+    render_delete_confirm,
+    render_detail,
+    render_doctor,
+    render_error,
+    render_index,
+    render_settings,
+    song_url,
+)
 from .waveform import wav_waveform_svg
 
 
@@ -23,7 +35,8 @@ def create_app(library: LibraryPaths | None = None):
 
     library = library or LibraryPaths()
     pipeline = Pipeline(library)
-    runner = LocalJobRunner(library, pipeline)
+    settings = load_settings(library)
+    runner = LocalJobRunner(library, pipeline, worker_count=int(settings["worker_count"]))
     runner.start()
     app = FastAPI(title="ktv-mux")
     app.mount("/static", StaticFiles(directory=str(Path(__file__).with_name("static"))), name="static")
@@ -35,14 +48,42 @@ def create_app(library: LibraryPaths | None = None):
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
+        settings = load_settings(library)
         songs = [song_summary(library, song_id) for song_id in library.list_song_ids()]
         jobs = [job.to_dict() for job in runner.list_jobs(limit=8)]
         auto_refresh = any(job.get("state") in {"queued", "running", "canceling"} for job in jobs)
-        return page("Songs", render_index(songs, jobs), auto_refresh=auto_refresh)
+        return page(
+            "Songs",
+            render_index(songs, jobs),
+            auto_refresh=auto_refresh,
+            refresh_seconds=int(settings["auto_refresh_seconds"]),
+        )
 
     @app.get("/doctor", response_class=HTMLResponse)
     def doctor() -> str:
         return page("Doctor", render_doctor(run_doctor(library)))
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page() -> str:
+        return page("Settings", render_settings(load_settings(library)))
+
+    @app.post("/settings")
+    def settings_save(
+        worker_count: int = Form(2),
+        preview_start: float = Form(0.0),
+        preview_duration: float = Form(20.0),
+        auto_refresh_seconds: int = Form(3),
+    ):
+        save_settings(
+            library,
+            {
+                "worker_count": worker_count,
+                "preview_start": preview_start,
+                "preview_duration": preview_duration,
+                "auto_refresh_seconds": auto_refresh_seconds,
+            },
+        )
+        return RedirectResponse("/settings", status_code=303)
 
     @app.post("/import")
     def import_route(
@@ -69,31 +110,29 @@ def create_app(library: LibraryPaths | None = None):
 
     @app.post("/import-upload")
     async def import_upload_route(
-        file: UploadFile = File(...),
+        files: list[UploadFile] = File(...),
         song_id: str = Form(""),
         title: str = Form(""),
         artist: str = Form(""),
     ):
-        original_name = file.filename or "upload.media"
-        clean_id = normalize_song_id(song_id) if song_id else normalize_song_id(Path(original_name).stem)
-        library.ensure_song_dirs(clean_id)
-        suffix = Path(original_name).suffix.lower() or ".media"
-        dest = library.raw_dir(clean_id) / f"source{suffix}"
-        with dest.open("wb") as out:
-            while chunk := await file.read(1024 * 1024):
-                out.write(chunk)
-        song = record_imported_source(
-            library,
-            clean_id,
-            dest,
-            title=title or None,
-            artist=artist or None,
-        )
-        return RedirectResponse(song_url(song.song_id), status_code=303)
+        songs = []
+        for index, file in enumerate(files):
+            songs.append(
+                await save_upload(
+                    library,
+                    file,
+                    song_id=song_id if len(files) == 1 else "",
+                    title=title if index == 0 else "",
+                    artist=artist if index == 0 else "",
+                )
+            )
+        location = song_url(songs[0].song_id) if len(songs) == 1 else "/"
+        return RedirectResponse(location, status_code=303)
 
     @app.get("/songs/{song_id}", response_class=HTMLResponse)
     def detail(song_id: str) -> str:
         clean_id = normalize_song_id(song_id)
+        settings = load_settings(library)
         summary = song_summary(library, clean_id)
         status = read_json(library.status_json(clean_id), default={}) or {}
         report = read_json(library.report_json(clean_id), default={}) or {}
@@ -116,8 +155,16 @@ def create_app(library: LibraryPaths | None = None):
             jobs,
             run_doctor(library, clean_id),
             list_takes(library, clean_id),
+            next_actions(library, clean_id),
+            settings,
         )
-        return page(clean_id, body, auto_refresh=auto_refresh)
+        return page(clean_id, body, auto_refresh=auto_refresh, refresh_seconds=int(settings["auto_refresh_seconds"]))
+
+    @app.post("/songs/{song_id}/metadata")
+    def save_metadata(song_id: str, title: str = Form(""), artist: str = Form("")):
+        clean_id = normalize_song_id(song_id)
+        update_song_metadata(library, clean_id, title=title or None, artist=artist or None)
+        return RedirectResponse(song_url(clean_id), status_code=303)
 
     @app.post("/songs/{song_id}/lyrics")
     def save_lyrics(song_id: str, lyrics: str = Form("")):
@@ -157,6 +204,7 @@ def create_app(library: LibraryPaths | None = None):
         audio_order: str = Form("instrumental-first"),
         preview_start: float = Form(0.0),
         preview_duration: float = Form(20.0),
+        duration_limit: float = Form(0.0),
     ):
         clean_id = normalize_song_id(song_id)
         if stage not in {
@@ -180,6 +228,7 @@ def create_app(library: LibraryPaths | None = None):
                 "audio_order": audio_order,
                 "start": preview_start,
                 "duration": preview_duration,
+                "duration_limit": duration_limit or None,
             },
         )
         return RedirectResponse(song_url(clean_id), status_code=303)
@@ -194,6 +243,11 @@ def create_app(library: LibraryPaths | None = None):
         job = runner.retry(job_id)
         location = song_url(job.song_id) if job else "/"
         return RedirectResponse(location, status_code=303)
+
+    @app.post("/jobs/prune")
+    def prune_jobs_route():
+        runner.prune_jobs()
+        return RedirectResponse("/", status_code=303)
 
     @app.post("/songs/{song_id}/shift")
     def shift_subtitles(song_id: str, seconds: float = Form(...)):
@@ -247,6 +301,12 @@ def create_app(library: LibraryPaths | None = None):
         path = library.instrumental_wav(clean_id) if library.instrumental_wav(clean_id).exists() else library.mix_wav(clean_id)
         return Response(wav_waveform_svg(path), media_type="image/svg+xml")
 
+    @app.get("/songs/{song_id}/export")
+    def export_song(song_id: str):
+        clean_id = normalize_song_id(song_id)
+        path = export_song_package(library, clean_id)
+        return FileResponse(path, filename=path.name)
+
     @app.get("/songs/{song_id}/download/{kind}")
     def download(song_id: str, kind: str):
         clean_id = normalize_song_id(song_id)
@@ -290,6 +350,31 @@ def serve(*, library: LibraryPaths, host: str, port: int) -> None:
     except Exception as exc:  # pragma: no cover
         raise RuntimeError('uvicorn is missing. Install with: pip install -e ".[web]"') from exc
     uvicorn.run(create_app(library), host=host, port=port)
+
+
+async def save_upload(
+    library: LibraryPaths,
+    file,
+    *,
+    song_id: str = "",
+    title: str = "",
+    artist: str = "",
+):
+    original_name = file.filename or "upload.media"
+    clean_id = normalize_song_id(song_id) if song_id else normalize_song_id(Path(original_name).stem)
+    library.ensure_song_dirs(clean_id)
+    suffix = Path(original_name).suffix.lower() or ".media"
+    dest = library.raw_dir(clean_id) / f"source{suffix}"
+    with dest.open("wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            out.write(chunk)
+    return record_imported_source(
+        library,
+        clean_id,
+        dest,
+        title=title or None,
+        artist=artist or None,
+    )
 
 
 def audio_path(library: LibraryPaths, song_id: str, kind: str) -> Path:

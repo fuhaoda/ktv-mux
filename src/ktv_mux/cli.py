@@ -3,15 +3,20 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
 from .diagnostics import run_doctor
 from .errors import KtvError
+from .exporter import export_song_package
+from .jobs import LocalJobRunner
 from .jsonio import read_json
-from .library import delete_song, song_summary
+from .library import delete_song, song_summary, update_song_metadata
 from .paths import LibraryPaths
 from .pipeline import Pipeline
+from .planner import next_actions
+from .settings import load_settings, save_settings
 from .versions import delete_take, list_takes, set_current_take, update_take
 
 
@@ -26,11 +31,22 @@ def build_parser() -> argparse.ArgumentParser:
     import_p.add_argument("--title")
     import_p.add_argument("--artist")
 
+    import_many_p = sub.add_parser("import-many", help="import several local media files")
+    import_many_p.add_argument("sources", nargs="+", help="local paths or URLs")
+
+    metadata_p = sub.add_parser("metadata", help="edit song title and artist")
+    metadata_p.add_argument("song_id")
+    metadata_p.add_argument("--title")
+    metadata_p.add_argument("--artist")
+
     lyrics_p = sub.add_parser("lyrics", help="copy lyrics text into the song folder")
     lyrics_p.add_argument("song_id")
     lyrics_p.add_argument("lyrics_path")
 
     sub.add_parser("list", help="list known songs")
+
+    next_p = sub.add_parser("next", help="show suggested next actions for a song")
+    next_p.add_argument("song_id")
 
     probe_p = sub.add_parser("probe", help="probe source media")
     probe_p.add_argument("song_id")
@@ -81,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["instrumental-first", "original-first"],
         help="instrumental-first makes accompaniment track 1; original-first keeps original mix as track 1",
     )
+    mux_p.add_argument("--duration-limit", type=float, default=None, help="mux only the first N seconds")
 
     replace_p = sub.add_parser(
         "replace-audio",
@@ -98,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not copy source subtitle streams",
     )
+    replace_p.add_argument("--duration-limit", type=float, default=None, help="mux only the first N seconds")
 
     clean_p = sub.add_parser("clean-work", help="remove regenerable work files for one song")
     clean_p.add_argument("song_id")
@@ -118,6 +136,20 @@ def build_parser() -> argparse.ArgumentParser:
     take_delete_p = sub.add_parser("take-delete", help="delete a saved output take")
     take_delete_p.add_argument("song_id")
     take_delete_p.add_argument("filename")
+
+    export_p = sub.add_parser("export", help="zip current song outputs and reports")
+    export_p.add_argument("song_id")
+
+    jobs_p = sub.add_parser("jobs", help="list local Web jobs")
+    jobs_p.add_argument("--limit", type=int, default=25)
+
+    sub.add_parser("jobs-prune", help="delete completed, failed, and canceled local Web jobs")
+
+    settings_p = sub.add_parser("settings", help="show or update local defaults")
+    settings_p.add_argument("--worker-count", type=int)
+    settings_p.add_argument("--preview-start", type=float)
+    settings_p.add_argument("--preview-duration", type=float)
+    settings_p.add_argument("--auto-refresh-seconds", type=int)
 
     delete_p = sub.add_parser("delete", help="delete raw/work/output folders for one song")
     delete_p.add_argument("song_id")
@@ -165,10 +197,16 @@ def main(argv: list[str] | None = None) -> int:
 def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths) -> Any:
     if args.command == "import":
         return pipeline.import_source(args.source, song_id=args.song_id, title=args.title, artist=args.artist)
+    if args.command == "import-many":
+        return [pipeline.import_source(source) for source in args.sources]
+    if args.command == "metadata":
+        return update_song_metadata(library, args.song_id, title=args.title, artist=args.artist)
     if args.command == "lyrics":
         return {"lyrics_path": str(pipeline.set_lyrics(args.song_id, Path(args.lyrics_path)))}
     if args.command == "list":
         return [song_summary(library, song_id) for song_id in library.list_song_ids()]
+    if args.command == "next":
+        return next_actions(library, args.song_id)
     if args.command == "probe":
         info = pipeline.probe(args.song_id)
         return {
@@ -205,7 +243,11 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
         )
         return {"lines": len(result.get("lines") or []), "lyrics_ass": str(library.lyrics_ass(args.song_id))}
     if args.command == "mux":
-        return {"final_mkv": str(pipeline.mux(args.song_id, audio_order=args.audio_order))}
+        return {
+            "final_mkv": str(
+                pipeline.mux(args.song_id, audio_order=args.audio_order, duration_limit=args.duration_limit)
+            )
+        }
     if args.command == "replace-audio":
         return {
             "audio_replaced_mkv": str(
@@ -213,6 +255,7 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
                     args.song_id,
                     keep_audio_index=args.keep_audio_index,
                     copy_subtitles=not args.no_copy_subtitles,
+                    duration_limit=args.duration_limit,
                 )
             )
         }
@@ -228,6 +271,24 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
     if args.command == "take-delete":
         delete_take(library, args.song_id, args.filename)
         return {"deleted": args.filename}
+    if args.command == "export":
+        return {"package_zip": str(export_song_package(library, args.song_id))}
+    if args.command == "jobs":
+        runner = LocalJobRunner(library, pipeline)
+        return [job.to_dict() for job in runner.list_jobs(limit=args.limit)]
+    if args.command == "jobs-prune":
+        runner = LocalJobRunner(library, pipeline)
+        return {"removed": runner.prune_jobs()}
+    if args.command == "settings":
+        updates = {
+            "worker_count": args.worker_count,
+            "preview_start": args.preview_start,
+            "preview_duration": args.preview_duration,
+            "auto_refresh_seconds": args.auto_refresh_seconds,
+        }
+        if any(value is not None for value in updates.values()):
+            return save_settings(library, updates)
+        return load_settings(library)
     if args.command == "delete":
         delete_song(library, args.song_id)
         return {"deleted": args.song_id}
@@ -253,11 +314,17 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
 
 
 def print_result(value: Any) -> None:
-    if hasattr(value, "__dataclass_fields__"):
-        from dataclasses import asdict
+    print(json.dumps(jsonable(value), ensure_ascii=False, indent=2, sort_keys=True))
 
-        value = asdict(value)
-    print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+def jsonable(value: Any) -> Any:
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, list):
+        return [jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: jsonable(item) for key, item in value.items()}
+    return value
 
 
 if __name__ == "__main__":
