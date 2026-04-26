@@ -33,9 +33,9 @@ Open `http://127.0.0.1:8000`.
 .venv/bin/ktv import assets/朋友-周华健.mkv
 .venv/bin/ktv metadata 朋友-周华健 --title "朋友" --artist "周华健"
 .venv/bin/ktv probe 朋友-周华健
-.venv/bin/ktv preview-tracks 朋友-周华健 --start 30 --duration 20
+.venv/bin/ktv preview-tracks 朋友-周华健 --start 30 --duration 20 --count 2 --spacing 45
 .venv/bin/ktv extract 朋友-周华健 --audio-index 0
-.venv/bin/ktv separate 朋友-周华健
+.venv/bin/ktv separate 朋友-周华健 --model htdemucs --device auto
 ```
 
 Output:
@@ -60,10 +60,16 @@ Before extracting, use `preview-tracks` or the Web `Preview Tracks` button to cr
 Set defaults used by the Web forms:
 
 ```bash
-ktv settings --preview-start 30 --preview-duration 20 --worker-count 2 --auto-refresh-seconds 3
+ktv settings --preview-start 30 --preview-duration 20 --preview-count 2 --demucs-model htdemucs --demucs-device auto --worker-count 2 --auto-refresh-seconds 3
 ```
 
 The Web Settings page exposes the same values. Worker count applies when the Web app starts.
+
+Use `--preset chorus` when you want preview clips around the middle/chorus area instead of the intro:
+
+```bash
+ktv preview-tracks 朋友-周华健 --preset chorus --count 3 --duration 12
+```
 
 ## Replace Track 2 With A Generated Instrumental
 
@@ -80,6 +86,15 @@ library/output/朋友-周华健/朋友-周华健.audio-replaced.mkv
 ```
 
 This output keeps the source video, keeps original Track 1 as `原唱`, writes the generated instrumental as Track 2 `伴奏`, and copies source subtitles when present.
+
+Normalize the generated instrumental before using it:
+
+```bash
+ktv normalize 朋友-周华健 --target-i -16
+ktv normalize 朋友-周华健 --target-i -16 --replace-current
+```
+
+The first command creates `instrumental.normalized.wav`; the second promotes it to `instrumental.wav`.
 
 ## Inspect Separation
 
@@ -108,7 +123,8 @@ ktv take-delete 朋友-周华健 instrumental.20260425T010101Z.wav
 Export a review package:
 
 ```bash
-ktv export 朋友-周华健
+ktv export 朋友-周华健 --include-logs
+ktv export 朋友-周华健 --no-audio --no-takes
 ```
 
 Output:
@@ -117,7 +133,7 @@ Output:
 library/output/朋友-周华健/朋友-周华健.package.zip
 ```
 
-The package includes current outputs, reports, lyrics/subtitles, alignment, and saved takes.
+The package includes current outputs, reports, lyrics/subtitles, alignment, and saved takes by default. Flags can exclude large audio/MKV/take files or include logs.
 
 ## Full KTV MKV With Lyrics
 
@@ -179,6 +195,15 @@ Batch import local files:
 
 ```bash
 ktv import-many ~/Movies/song1.mkv ~/Movies/song2.mkv
+```
+
+Batch one stage across the library:
+
+```bash
+ktv batch-stage probe
+ktv batch-stage preview-tracks --preset chorus --count 2
+ktv batch-stage extract --audio-index 0
+ktv batch-stage separate --model htdemucs --device auto
 ```
 
 Run local diagnostics:

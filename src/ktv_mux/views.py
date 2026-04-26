@@ -93,6 +93,7 @@ def render_detail(
     takes: list[dict[str, Any]],
     actions: list[dict[str, Any]],
     settings: dict[str, Any],
+    log_tails: dict[str, str],
 ) -> str:
     state = status.get("state") or "idle"
     state_class = (
@@ -105,6 +106,12 @@ def render_detail(
     output_blocks = render_outputs(song_id, summary, report, takes)
     preview_start = fmt_attr(settings.get("preview_start"))
     preview_duration = fmt_attr(settings.get("preview_duration"))
+    preview_count = int(settings.get("preview_count") or 1)
+    preview_spacing = fmt_attr(settings.get("preview_spacing"))
+    preview_preset = str(settings.get("preview_preset") or "manual")
+    demucs_model = str(settings.get("demucs_model") or "htdemucs")
+    demucs_device = str(settings.get("demucs_device") or "auto")
+    normalize_target_i = fmt_attr(settings.get("normalize_target_i"))
     return f"""
 <section class="hero">
   <div>
@@ -134,10 +141,19 @@ def render_detail(
           <input name="preview_start" type="number" step="1" min="0" value="{preview_start}">
           <label>Duration</label>
           <input name="preview_duration" type="number" step="1" min="3" value="{preview_duration}">
+          <label>Segments</label>
+          <input name="preview_count" type="number" step="1" min="1" max="5" value="{preview_count}">
+          <label>Preset</label>
+          <select name="preview_preset">{render_select_options(["manual", "chorus"], preview_preset)}</select>
+          <input type="hidden" name="preview_spacing" value="{preview_spacing}">
           <button type="submit">Build Previews</button>
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/separate">
           <strong>Separate</strong>
+          <label>Model</label>
+          <input name="model" value="{escape(demucs_model)}">
+          <label>Device</label>
+          <select name="device">{render_select_options(["auto", "mps", "cpu", "cuda"], demucs_device)}</select>
           <button type="submit">Make Stem</button>
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/replace-audio">
@@ -151,6 +167,11 @@ def render_detail(
       </div>
       <div class="row" style="margin-top:12px;">
         <form method="post" action="{song_url(song_id)}/run/process"><button class="secondary" type="submit">Run Full Process</button></form>
+        <form method="post" action="{song_url(song_id)}/run/normalize" class="row">
+          <input class="number-input" name="target_i" type="number" step="0.5" value="{normalize_target_i}">
+          <label><input name="replace_current" type="checkbox" value="1" style="width:auto;"> Replace</label>
+          <button class="secondary" type="submit">Normalize</button>
+        </form>
       </div>
     </div>
     <div class="panel">
@@ -164,7 +185,7 @@ def render_detail(
     <div class="panel">
       <h2>Lyrics</h2>
       <form method="post" action="{song_url(song_id)}/lyrics" class="stack">
-        <textarea name="lyrics">{escape(lyrics)}</textarea>
+        <textarea name="lyrics" data-draft-key="{escape(song_id)}:lyrics">{escape(lyrics)}</textarea>
         <div class="row"><button type="submit">Save Lyrics</button></div>
       </form>
       <form method="post" action="{song_url(song_id)}/lyrics-file" enctype="multipart/form-data" class="row" style="margin-top:10px;">
@@ -217,7 +238,7 @@ def render_detail(
     </div>
     <div class="panel">
       <h2>Logs</h2>
-      {render_logs(song_id, logs)}
+      {render_logs(song_id, logs, log_tails)}
     </div>
     <div class="panel">
       <h2>Report</h2>
@@ -248,6 +269,7 @@ def render_audio_blocks(song_id: str, summary: dict[str, Any]) -> str:
     for key, title, kind in [
         ("has_mix", "Extracted Mix", "mix"),
         ("has_instrumental", "Instrumental", "instrumental"),
+        ("has_normalized_instrumental", "Normalized Instrumental", "instrumental-normalized"),
         ("has_vocals", "Vocals Stem", "vocals"),
     ]:
         if summary.get(key):
@@ -292,15 +314,19 @@ def render_track_panel(song_id: str, report: dict[str, Any]) -> str:
     if not audio_streams:
         return "<div class='empty'>Run Probe to inspect source audio tracks.</div>"
     rows = []
-    previews = {int(item.get("audio_index", -1)): item for item in (report.get("track_previews") or [])}
+    previews: dict[int, list[dict[str, Any]]] = {}
+    for item in report.get("track_previews") or []:
+        previews.setdefault(int(item.get("audio_index", -1)), []).append(item)
     for audio_index, stream in enumerate(audio_streams):
         details = audio_details(stream)
-        preview = previews.get(audio_index)
-        player = (
-            f"<audio controls src='{song_url(song_id)}/audio/track-preview-{audio_index + 1}'></audio>"
-            if preview
-            else "<span class='subtle'>No preview yet.</span>"
+        track_previews = sorted(previews.get(audio_index) or [], key=lambda item: int(item.get("segment") or 1))
+        player = "".join(
+            f"<div class='compact'>Segment {int(preview.get('segment') or 1)} @ {fmt(preview.get('start'))}s</div>"
+            f"<audio controls src='{song_url(song_id)}/audio/track-preview-{audio_index + 1}-{int(preview.get('segment') or 1)}'></audio>"
+            for preview in track_previews
         )
+        if not player:
+            player = "<span class='subtle'>No preview yet.</span>"
         rows.append(
             "<div class='track-grid'>"
             f"<div><strong>Track {audio_index + 1}</strong></div>"
@@ -317,11 +343,15 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
         return ""
     rows = []
     for index, item in enumerate(lines[:24]):
+        start_id = f"line-{index}-start"
+        end_id = f"line-{index}-end"
         rows.append(
             "<div class='alignment-row'>"
             f"<div class='compact'>Line {index + 1}</div>"
-            f"<input name='line_{index}_start' type='number' step='0.01' value='{fmt_attr(item.get('start'))}'>"
-            f"<input name='line_{index}_end' type='number' step='0.01' value='{fmt_attr(item.get('end'))}'>"
+            f"<div><input id='{start_id}' name='line_{index}_start' type='number' step='0.01' value='{fmt_attr(item.get('start'))}'>"
+            f"<input type='range' min='0' max='600' step='0.01' value='{fmt_attr(item.get('start'))}' data-sync-target='#{start_id}'></div>"
+            f"<div><input id='{end_id}' name='line_{index}_end' type='number' step='0.01' value='{fmt_attr(item.get('end'))}'>"
+            f"<input type='range' min='0' max='600' step='0.01' value='{fmt_attr(item.get('end'))}' data-sync-target='#{end_id}'></div>"
             f"<input name='line_{index}_text' value='{escape(str(item.get('text') or ''))}'>"
             "</div>"
         )
@@ -336,6 +366,12 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
           {note}
           <div><button class="secondary" type="submit">Save Subtitle Edits</button></div>
         </form>
+        <form method="post" action="{song_url(song_id)}/alignment-shift-lines" class="row">
+          <input class="number-input" name="start_line" type="number" min="1" value="1">
+          <input class="number-input" name="end_line" type="number" min="1" value="{min(len(lines), 24)}">
+          <input class="number-input" name="seconds" type="number" step="0.05" value="0">
+          <button class="secondary" type="submit">Shift Lines</button>
+        </form>
       </div>
 """
 
@@ -349,6 +385,14 @@ def render_outputs(
     rows = []
     if summary.get("has_instrumental"):
         rows.append(output_row("Instrumental WAV", f"{song_url(song_id)}/download/instrumental", "instrumental.wav"))
+    if summary.get("has_normalized_instrumental"):
+        rows.append(
+            output_row(
+                "Normalized Instrumental WAV",
+                f"{song_url(song_id)}/download/instrumental-normalized",
+                "instrumental.normalized.wav",
+            )
+        )
     if summary.get("has_audio_replaced_mkv"):
         rows.append(output_row("Audio-Replaced MKV", f"{song_url(song_id)}/download/audio-replaced-mkv", "new instrumental as Track 2"))
     if summary.get("has_mkv"):
@@ -481,14 +525,19 @@ def render_job_actions(job: dict[str, Any]) -> str:
     return ""
 
 
-def render_logs(song_id: str, logs: list[str]) -> str:
+def render_logs(song_id: str, logs: list[str], log_tails: dict[str, str] | None = None) -> str:
     if not logs:
         return "<div class='empty'>No stage logs yet.</div>"
     links = "".join(
         f"<a class='button secondary' href='{song_url(song_id)}/log/{escape(stage)}' target='_blank'>{escape(stage)}.log</a>"
         for stage in logs
     )
-    return f"<div class='row'>{links}</div>"
+    tails = ""
+    for stage in logs:
+        text = (log_tails or {}).get(stage)
+        if text:
+            tails += f"<h3>{escape(stage)}.log tail</h3><pre>{escape(text)}</pre>"
+    return f"<div class='tight'><div class='row'>{links}</div>{tails}</div>"
 
 
 def render_doctor_summary(doctor: dict[str, Any]) -> str:
@@ -548,11 +597,24 @@ def render_settings(settings: dict[str, Any]) -> str:
       <div><label>Auto refresh seconds</label><input name="auto_refresh_seconds" type="number" min="1" value="{fmt_attr(settings.get("auto_refresh_seconds"))}"></div>
       <div><label>Default preview start</label><input name="preview_start" type="number" min="0" step="1" value="{fmt_attr(settings.get("preview_start"))}"></div>
       <div><label>Default preview duration</label><input name="preview_duration" type="number" min="1" step="1" value="{fmt_attr(settings.get("preview_duration"))}"></div>
+      <div><label>Preview segments</label><input name="preview_count" type="number" min="1" max="5" value="{fmt_attr(settings.get("preview_count"))}"></div>
+      <div><label>Preview spacing</label><input name="preview_spacing" type="number" min="1" step="1" value="{fmt_attr(settings.get("preview_spacing"))}"></div>
+      <div><label>Preview preset</label><select name="preview_preset">{render_select_options(["manual", "chorus"], str(settings.get("preview_preset") or "manual"))}</select></div>
+      <div><label>Demucs model</label><input name="demucs_model" value="{escape(str(settings.get("demucs_model") or "htdemucs"))}"></div>
+      <div><label>Demucs device</label><select name="demucs_device">{render_select_options(["auto", "mps", "cpu", "cuda"], str(settings.get("demucs_device") or "auto"))}</select></div>
+      <div><label>Normalize target I</label><input name="normalize_target_i" type="number" step="0.5" value="{fmt_attr(settings.get("normalize_target_i"))}"></div>
     </div>
     <div><button type="submit">Save Settings</button></div>
   </form>
 </section>
 """
+
+
+def render_select_options(values: list[str], selected_value: str) -> str:
+    return "".join(
+        f"<option value='{escape(value)}'{' selected' if value == selected_value else ''}>{escape(value)}</option>"
+        for value in values
+    )
 
 
 def render_audio_options(report: dict[str, Any], selected_index: int) -> str:

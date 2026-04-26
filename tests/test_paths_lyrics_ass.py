@@ -1,4 +1,4 @@
-from ktv_mux.alignment import generate_even_alignment, shift_alignment, update_alignment_lines
+from ktv_mux.alignment import generate_even_alignment, shift_alignment, shift_alignment_lines, update_alignment_lines
 from ktv_mux.ass import ass_karaoke_text, build_ass, seconds_to_ass_time
 from ktv_mux.lyrics import (
     extract_lrc_entries,
@@ -81,6 +81,14 @@ def test_shift_alignment_moves_lines_and_tokens():
     assert shifted["manual_offset_seconds"] == 0.5
     assert shifted["lines"][0]["start"] == alignment["lines"][0]["start"] + 0.5
     assert shifted["lines"][0]["tokens"][0]["start"] == alignment["lines"][0]["tokens"][0]["start"] + 0.5
+
+
+def test_shift_alignment_lines_only_moves_requested_range():
+    alignment = generate_even_alignment(["第一句", "第二句"], duration=8)
+    shifted = shift_alignment_lines(alignment, start_index=1, end_index=1, offset_seconds=0.5)
+
+    assert shifted["lines"][0]["start"] == alignment["lines"][0]["start"]
+    assert shifted["lines"][1]["start"] == alignment["lines"][1]["start"] + 0.5
 
 
 def test_update_alignment_lines_retimes_tokens():

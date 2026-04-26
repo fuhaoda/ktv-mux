@@ -1,6 +1,6 @@
 from ktv_mux.alignment import generate_even_alignment
 from ktv_mux.jsonio import read_json, write_json
-from ktv_mux.library import delete_song, import_source, save_lyrics_text, song_summary
+from ktv_mux.library import delete_song, import_source, save_lyrics_file, save_lyrics_text, song_summary
 from ktv_mux.paths import LibraryPaths
 from ktv_mux.pipeline import Pipeline
 
@@ -52,6 +52,19 @@ def test_save_lyrics_text_writes_lrc_alignment(tmp_path):
     alignment = read_json(library.alignment_json("song"))
     assert alignment["backend"] == "lrc"
     assert alignment["lines"][0]["end"] == 3.0
+
+
+def test_save_lyrics_file_detects_encoding_and_keeps_original(tmp_path):
+    source = tmp_path / "lyrics.lrc"
+    source.write_bytes("[00:01.00]朋友".encode("gb18030"))
+    library = LibraryPaths(tmp_path / "library")
+
+    save_lyrics_file(library, "song", source)
+
+    assert library.lyrics_txt("song").read_text(encoding="utf-8") == "朋友\n"
+    assert library.original_lyrics_file("song", ".lrc").read_bytes() == source.read_bytes()
+    report = read_json(library.report_json("song"))
+    assert report["lyrics_import"]["encoding"] == "gb18030"
 
 
 def test_delete_song_removes_library_folders(tmp_path):

@@ -101,11 +101,18 @@ class LibraryPaths:
     def previews_dir(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "track-previews"
 
-    def track_preview_wav(self, song_id: str, audio_index: int) -> Path:
-        return self.previews_dir(song_id) / f"track-{audio_index + 1}.wav"
+    def track_preview_wav(self, song_id: str, audio_index: int, segment_index: int = 0) -> Path:
+        suffix = "" if segment_index <= 0 else f"-{segment_index + 1}"
+        return self.previews_dir(song_id) / f"track-{audio_index + 1}{suffix}.wav"
 
     def instrumental_wav(self, song_id: str) -> Path:
         return self.output_dir(song_id) / "instrumental.wav"
+
+    def normalized_instrumental_wav(self, song_id: str) -> Path:
+        return self.output_dir(song_id) / "instrumental.normalized.wav"
+
+    def original_lyrics_file(self, song_id: str, suffix: str = ".txt") -> Path:
+        return self.raw_dir(song_id) / f"lyrics.original{suffix or '.txt'}"
 
     def alignment_json(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "alignment.json"
@@ -126,6 +133,9 @@ class LibraryPaths:
 
     def status_json(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "status.json"
+
+    def checkpoints_json(self, song_id: str) -> Path:
+        return self.work_dir(song_id) / "checkpoints.json"
 
     def stage_log(self, song_id: str, stage: str) -> Path:
         return self.work_dir(song_id) / "logs" / f"{normalize_song_id(stage)}.log"

@@ -42,7 +42,7 @@ ktv = "ktv_mux.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ktv_mux = ["static/*.css", "templates/*.html"]
+ktv_mux = ["static/*.css", "static/*.js", "templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -13,14 +13,27 @@ class FakePipeline:
     def extract(self, song_id, *, audio_index=0, cancel_file=None):
         self.calls.append(("extract", song_id, audio_index, cancel_file is not None))
 
-    def preview_tracks(self, song_id, *, duration=20.0, start=0.0, cancel_file=None):
-        self.calls.append(("preview-tracks", song_id, duration, start, cancel_file is not None))
+    def preview_tracks(
+        self,
+        song_id,
+        *,
+        duration=20.0,
+        start=0.0,
+        count=1,
+        spacing=45.0,
+        preset="manual",
+        cancel_file=None,
+    ):
+        self.calls.append(("preview-tracks", song_id, duration, start, count, spacing, preset, cancel_file is not None))
 
     def shift_subtitles(self, song_id, *, seconds=0.0):
         self.calls.append(("shift-subtitles", song_id, seconds))
 
     def mux(self, song_id, *, audio_order="instrumental-first", duration_limit=None, cancel_file=None):
         self.calls.append(("mux", song_id, audio_order, duration_limit, cancel_file is not None))
+
+    def separate(self, song_id, *, model="htdemucs", device=None, cancel_file=None):
+        self.calls.append(("separate", song_id, model, device, cancel_file is not None))
 
     def replace_audio(self, song_id, *, keep_audio_index=0, copy_subtitles=True, duration_limit=None, cancel_file=None):
         self.calls.append(("replace-audio", song_id, keep_audio_index, copy_subtitles, duration_limit, cancel_file is not None))
@@ -83,6 +96,26 @@ def test_job_runner_prunes_finished_jobs(tmp_path):
     assert library.job_json(queued.job_id).exists()
 
 
+def test_job_runner_recovers_running_job_from_checkpoint(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+    library.ensure_song_dirs("song")
+    library.mix_wav("song").write_bytes(b"mix")
+    runner = LocalJobRunner(library, FakePipeline())
+    job = runner.submit("song", "extract")
+    data = read_json(library.job_json(job.job_id))
+    data["state"] = "running"
+    write_json(library.job_json(job.job_id), data)
+    write_json(
+        library.checkpoints_json("song"),
+        {"extract": {"state": "completed", "outputs": [str(library.mix_wav("song"))]}},
+    )
+
+    runner._recover_jobs()
+
+    recovered = read_json(library.job_json(job.job_id))
+    assert recovered["state"] == "completed"
+
+
 def test_run_pipeline_stage_passes_stage_parameters():
     pipeline = FakePipeline()
 
@@ -115,7 +148,7 @@ def test_run_pipeline_stage_passes_stage_parameters():
     assert pipeline.calls == [
         ("import-url", "song", "https://example.invalid/v", None, None, False),
         ("extract", "song", 2, True),
-        ("preview-tracks", "song", 7.5, 12.0, False),
+        ("preview-tracks", "song", 7.5, 12.0, 1, 45.0, "manual", False),
         ("shift-subtitles", "song", -0.25),
         ("mux", "song", "instrumental-first", 3.0, False),
         ("replace-audio", "song", 1, True, 4.0, False),

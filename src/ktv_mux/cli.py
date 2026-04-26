@@ -64,10 +64,19 @@ def build_parser() -> argparse.ArgumentParser:
     preview_p.add_argument("song_id")
     preview_p.add_argument("--start", type=float, default=0.0, help="preview start offset in seconds")
     preview_p.add_argument("--duration", type=float, default=20.0)
+    preview_p.add_argument("--count", type=int, default=1, help="number of preview segments per audio track")
+    preview_p.add_argument("--spacing", type=float, default=45.0, help="seconds between preview segments")
+    preview_p.add_argument("--preset", default="manual", choices=["manual", "chorus"], help="preview start strategy")
 
     separate_p = sub.add_parser("separate", help="separate vocals from accompaniment")
     separate_p.add_argument("song_id")
     separate_p.add_argument("--model", default="htdemucs")
+    separate_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+
+    normalize_p = sub.add_parser("normalize", help="create a loudness-normalized instrumental WAV")
+    normalize_p.add_argument("song_id")
+    normalize_p.add_argument("--target-i", type=float, default=-16.0, help="target integrated loudness")
+    normalize_p.add_argument("--replace-current", action="store_true", help="replace instrumental.wav with normalized audio")
 
     align_p = sub.add_parser("align", help="align lyrics and generate ASS")
     align_p.add_argument("song_id")
@@ -139,6 +148,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     export_p = sub.add_parser("export", help="zip current song outputs and reports")
     export_p.add_argument("song_id")
+    export_p.add_argument("--no-audio", action="store_true")
+    export_p.add_argument("--no-mkv", action="store_true")
+    export_p.add_argument("--no-takes", action="store_true")
+    export_p.add_argument("--include-logs", action="store_true")
 
     jobs_p = sub.add_parser("jobs", help="list local Web jobs")
     jobs_p.add_argument("--limit", type=int, default=25)
@@ -149,6 +162,12 @@ def build_parser() -> argparse.ArgumentParser:
     settings_p.add_argument("--worker-count", type=int)
     settings_p.add_argument("--preview-start", type=float)
     settings_p.add_argument("--preview-duration", type=float)
+    settings_p.add_argument("--preview-count", type=int)
+    settings_p.add_argument("--preview-spacing", type=float)
+    settings_p.add_argument("--preview-preset", choices=["manual", "chorus"])
+    settings_p.add_argument("--demucs-model")
+    settings_p.add_argument("--demucs-device", choices=["auto", "cpu", "mps", "cuda"])
+    settings_p.add_argument("--normalize-target-i", type=float)
     settings_p.add_argument("--auto-refresh-seconds", type=int)
 
     delete_p = sub.add_parser("delete", help="delete raw/work/output folders for one song")
@@ -161,6 +180,18 @@ def build_parser() -> argparse.ArgumentParser:
     batch_p = sub.add_parser("batch", help="process every raw song folder")
     batch_p.add_argument("--root", default=None, help="raw root, defaults to library/raw")
     batch_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple"])
+
+    batch_stage_p = sub.add_parser("batch-stage", help="run one stage for every raw song folder")
+    batch_stage_p.add_argument("stage", choices=["probe", "preview-tracks", "extract", "separate"])
+    batch_stage_p.add_argument("--root", default=None, help="raw root, defaults to library/raw")
+    batch_stage_p.add_argument("--audio-index", type=int, default=0)
+    batch_stage_p.add_argument("--start", type=float, default=0.0)
+    batch_stage_p.add_argument("--duration", type=float, default=20.0)
+    batch_stage_p.add_argument("--count", type=int, default=1)
+    batch_stage_p.add_argument("--spacing", type=float, default=45.0)
+    batch_stage_p.add_argument("--preset", default="manual", choices=["manual", "chorus"])
+    batch_stage_p.add_argument("--model", default="htdemucs")
+    batch_stage_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
 
     status_p = sub.add_parser("status", help="show song status")
     status_p.add_argument("song_id")
@@ -218,9 +249,26 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
     if args.command == "extract":
         return {"mix_wav": str(pipeline.extract(args.song_id, audio_index=args.audio_index))}
     if args.command == "preview-tracks":
-        return pipeline.preview_tracks(args.song_id, duration=args.duration, start=args.start)
+        return pipeline.preview_tracks(
+            args.song_id,
+            duration=args.duration,
+            start=args.start,
+            count=args.count,
+            spacing=args.spacing,
+            preset=args.preset,
+        )
     if args.command == "separate":
-        return pipeline.separate(args.song_id, model=args.model)
+        return pipeline.separate(args.song_id, model=args.model, device=args.device)
+    if args.command == "normalize":
+        return {
+            "normalized_wav": str(
+                pipeline.normalize_instrumental(
+                    args.song_id,
+                    target_i=args.target_i,
+                    replace_current=args.replace_current,
+                )
+            )
+        }
     if args.command == "align":
         result = pipeline.align(args.song_id, backend=args.backend)
         return {
@@ -272,7 +320,18 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
         delete_take(library, args.song_id, args.filename)
         return {"deleted": args.filename}
     if args.command == "export":
-        return {"package_zip": str(export_song_package(library, args.song_id))}
+        return {
+            "package_zip": str(
+                export_song_package(
+                    library,
+                    args.song_id,
+                    include_audio=not args.no_audio,
+                    include_mkv=not args.no_mkv,
+                    include_takes=not args.no_takes,
+                    include_logs=args.include_logs,
+                )
+            )
+        }
     if args.command == "jobs":
         runner = LocalJobRunner(library, pipeline)
         return [job.to_dict() for job in runner.list_jobs(limit=args.limit)]
@@ -284,6 +343,12 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
             "worker_count": args.worker_count,
             "preview_start": args.preview_start,
             "preview_duration": args.preview_duration,
+            "preview_count": args.preview_count,
+            "preview_spacing": args.preview_spacing,
+            "preview_preset": args.preview_preset,
+            "demucs_model": args.demucs_model,
+            "demucs_device": args.demucs_device,
+            "normalize_target_i": args.normalize_target_i,
             "auto_refresh_seconds": args.auto_refresh_seconds,
         }
         if any(value is not None for value in updates.values()):
@@ -297,6 +362,20 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
     if args.command == "batch":
         raw_root = Path(args.root) if args.root else None
         return pipeline.batch(raw_root=raw_root, align_backend=args.align_backend)
+    if args.command == "batch-stage":
+        raw_root = Path(args.root) if args.root else None
+        return pipeline.batch_stage(
+            args.stage,
+            raw_root=raw_root,
+            audio_index=args.audio_index,
+            start=args.start,
+            duration=args.duration,
+            count=args.count,
+            spacing=args.spacing,
+            preset=args.preset,
+            model=args.model,
+            device=args.device,
+        )
     if args.command == "status":
         return {
             "summary": song_summary(library, args.song_id),

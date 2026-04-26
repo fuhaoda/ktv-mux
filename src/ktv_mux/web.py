@@ -6,7 +6,14 @@ from .errors import KtvError
 from .exporter import export_song_package
 from .jobs import LocalJobRunner
 from .jsonio import read_json
-from .library import delete_song, record_imported_source, save_lyrics_text, song_summary, update_song_metadata
+from .library import (
+    delete_song,
+    record_imported_source,
+    save_lyrics_file,
+    save_lyrics_text,
+    song_summary,
+    update_song_metadata,
+)
 from .paths import LibraryPaths, derive_song_id_from_source, is_url, normalize_song_id
 from .pipeline import Pipeline
 from .planner import next_actions
@@ -72,6 +79,12 @@ def create_app(library: LibraryPaths | None = None):
         worker_count: int = Form(2),
         preview_start: float = Form(0.0),
         preview_duration: float = Form(20.0),
+        preview_count: int = Form(1),
+        preview_spacing: float = Form(45.0),
+        preview_preset: str = Form("manual"),
+        demucs_model: str = Form("htdemucs"),
+        demucs_device: str = Form("auto"),
+        normalize_target_i: float = Form(-16.0),
         auto_refresh_seconds: int = Form(3),
     ):
         save_settings(
@@ -80,6 +93,12 @@ def create_app(library: LibraryPaths | None = None):
                 "worker_count": worker_count,
                 "preview_start": preview_start,
                 "preview_duration": preview_duration,
+                "preview_count": preview_count,
+                "preview_spacing": preview_spacing,
+                "preview_preset": preview_preset,
+                "demucs_model": demucs_model,
+                "demucs_device": demucs_device,
+                "normalize_target_i": normalize_target_i,
                 "auto_refresh_seconds": auto_refresh_seconds,
             },
         )
@@ -157,6 +176,7 @@ def create_app(library: LibraryPaths | None = None):
             list_takes(library, clean_id),
             next_actions(library, clean_id),
             settings,
+            log_tails(library, clean_id),
         )
         return page(clean_id, body, auto_refresh=auto_refresh, refresh_seconds=int(settings["auto_refresh_seconds"]))
 
@@ -174,7 +194,10 @@ def create_app(library: LibraryPaths | None = None):
     @app.post("/songs/{song_id}/lyrics-file")
     async def upload_lyrics(song_id: str, file: UploadFile = File(...)):
         data = await file.read()
-        save_lyrics_text(library, song_id, data.decode("utf-8-sig"))
+        temp = library.raw_dir(song_id) / (file.filename or "lyrics.txt")
+        temp.parent.mkdir(parents=True, exist_ok=True)
+        temp.write_bytes(data)
+        save_lyrics_file(library, song_id, temp)
         return RedirectResponse(song_url(song_id), status_code=303)
 
     @app.post("/songs/{song_id}/alignment")
@@ -195,6 +218,16 @@ def create_app(library: LibraryPaths | None = None):
         runner.submit(clean_id, "edit-subtitles", {"updates": updates})
         return RedirectResponse(song_url(clean_id), status_code=303)
 
+    @app.post("/songs/{song_id}/alignment-shift-lines")
+    def shift_subtitle_lines(song_id: str, start_line: int = Form(1), end_line: int = Form(1), seconds: float = Form(0.0)):
+        clean_id = normalize_song_id(song_id)
+        runner.submit(
+            clean_id,
+            "shift-subtitle-lines",
+            {"start_line": start_line, "end_line": end_line, "seconds": seconds},
+        )
+        return RedirectResponse(song_url(clean_id), status_code=303)
+
     @app.post("/songs/{song_id}/run/{stage}")
     def run_stage(
         song_id: str,
@@ -204,6 +237,13 @@ def create_app(library: LibraryPaths | None = None):
         audio_order: str = Form("instrumental-first"),
         preview_start: float = Form(0.0),
         preview_duration: float = Form(20.0),
+        preview_count: int = Form(1),
+        preview_spacing: float = Form(45.0),
+        preview_preset: str = Form("manual"),
+        model: str = Form("htdemucs"),
+        device: str = Form("auto"),
+        target_i: float = Form(-16.0),
+        replace_current: str = Form(""),
         duration_limit: float = Form(0.0),
     ):
         clean_id = normalize_song_id(song_id)
@@ -215,6 +255,7 @@ def create_app(library: LibraryPaths | None = None):
             "align",
             "mux",
             "replace-audio",
+            "normalize",
             "clean-work",
             "process",
         }:
@@ -228,6 +269,13 @@ def create_app(library: LibraryPaths | None = None):
                 "audio_order": audio_order,
                 "start": preview_start,
                 "duration": preview_duration,
+                "count": preview_count,
+                "spacing": preview_spacing,
+                "preset": preview_preset,
+                "model": model,
+                "device": device,
+                "target_i": target_i,
+                "replace_current": bool(replace_current),
                 "duration_limit": duration_limit or None,
             },
         )
@@ -302,9 +350,22 @@ def create_app(library: LibraryPaths | None = None):
         return Response(wav_waveform_svg(path), media_type="image/svg+xml")
 
     @app.get("/songs/{song_id}/export")
-    def export_song(song_id: str):
+    def export_song(
+        song_id: str,
+        include_audio: bool = True,
+        include_mkv: bool = True,
+        include_takes: bool = True,
+        include_logs: bool = False,
+    ):
         clean_id = normalize_song_id(song_id)
-        path = export_song_package(library, clean_id)
+        path = export_song_package(
+            library,
+            clean_id,
+            include_audio=include_audio,
+            include_mkv=include_mkv,
+            include_takes=include_takes,
+            include_logs=include_logs,
+        )
         return FileResponse(path, filename=path.name)
 
     @app.get("/songs/{song_id}/download/{kind}")
@@ -380,16 +441,20 @@ async def save_upload(
 def audio_path(library: LibraryPaths, song_id: str, kind: str) -> Path:
     if kind == "instrumental":
         return library.instrumental_wav(song_id)
+    if kind == "instrumental-normalized":
+        return library.normalized_instrumental_wav(song_id)
     if kind == "mix":
         return library.mix_wav(song_id)
     if kind == "vocals":
         return library.vocals_wav(song_id)
     if kind.startswith("track-preview-"):
         try:
-            index = int(kind.removeprefix("track-preview-")) - 1
+            parts = kind.removeprefix("track-preview-").split("-")
+            index = int(parts[0]) - 1
+            segment = int(parts[1]) - 1 if len(parts) > 1 else 0
         except ValueError as exc:
             raise KtvError(f"unknown audio kind: {kind}") from exc
-        return library.track_preview_wav(song_id, index)
+        return library.track_preview_wav(song_id, index, segment)
     raise KtvError(f"unknown audio kind: {kind}")
 
 
@@ -398,3 +463,11 @@ def available_logs(library: LibraryPaths, song_id: str) -> list[str]:
     if not logs_dir.exists():
         return []
     return sorted(path.stem for path in logs_dir.glob("*.log") if path.is_file())
+
+
+def log_tails(library: LibraryPaths, song_id: str, *, limit: int = 5000) -> dict[str, str]:
+    tails: dict[str, str] = {}
+    for stage in available_logs(library, song_id):
+        path = library.stage_log(song_id, stage)
+        tails[stage] = path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    return tails

@@ -138,8 +138,39 @@ def save_lyrics_text(library: LibraryPaths, song_id: str, lyrics_text: str, *, c
 
 
 def save_lyrics_file(library: LibraryPaths, song_id: str, source_path: Path) -> Path:
-    text = source_path.read_text(encoding="utf-8")
-    return save_lyrics_text(library, song_id, text)
+    clean_id = normalize_song_id(song_id)
+    library.ensure_song_dirs(clean_id)
+    data = source_path.read_bytes()
+    text, encoding, warnings = decode_lyrics_bytes(data)
+    original = library.original_lyrics_file(clean_id, source_path.suffix or ".txt")
+    original.write_bytes(data)
+    path = save_lyrics_text(library, clean_id, text)
+    report = read_json(library.report_json(clean_id), default={}) or {}
+    report["lyrics_import"] = {
+        "source": str(source_path),
+        "original_copy": str(original),
+        "encoding": encoding,
+        "warnings": warnings,
+    }
+    write_json(library.report_json(clean_id), report)
+    return path
+
+
+def decode_lyrics_bytes(data: bytes) -> tuple[str, str, list[str]]:
+    warnings: list[str] = []
+    encodings = ["utf-8-sig", "gb18030", "big5"]
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.insert(1, "utf-16")
+    for encoding in encodings:
+        try:
+            text = data.decode(encoding)
+            if encoding != "utf-8-sig":
+                warnings.append(f"Decoded lyrics as {encoding}.")
+            return text, encoding, warnings
+        except UnicodeDecodeError:
+            continue
+    warnings.append("Lyrics encoding was not recognized; invalid characters were replaced.")
+    return data.decode("utf-8", errors="replace"), "utf-8-replace", warnings
 
 
 def delete_song(library: LibraryPaths, song_id: str) -> None:
@@ -167,6 +198,7 @@ def song_summary(library: LibraryPaths, song_id: str) -> dict[str, Any]:
     summary["has_mix"] = library.mix_wav(song_id).exists()
     summary["has_vocals"] = library.vocals_wav(song_id).exists()
     summary["has_instrumental"] = library.instrumental_wav(song_id).exists()
+    summary["has_normalized_instrumental"] = library.normalized_instrumental_wav(song_id).exists()
     summary["has_alignment"] = library.alignment_json(song_id).exists()
     summary["has_ass"] = library.lyrics_ass(song_id).exists()
     summary["has_mkv"] = library.final_mkv(song_id).exists()

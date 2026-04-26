@@ -198,6 +198,31 @@ def shift_alignment(alignment: dict[str, Any], offset_seconds: float) -> dict[st
     return shifted
 
 
+def shift_alignment_lines(
+    alignment: dict[str, Any],
+    *,
+    start_index: int,
+    end_index: int,
+    offset_seconds: float,
+) -> dict[str, Any]:
+    shifted = copy.deepcopy(alignment)
+    offset = float(offset_seconds)
+    lines = shifted.get("lines") or []
+    start = max(0, int(start_index))
+    end = min(len(lines) - 1, int(end_index))
+    for index in range(start, end + 1):
+        line = lines[index]
+        if not isinstance(line, dict):
+            continue
+        _shift_timed_item(line, offset)
+        for token in line.get("tokens") or []:
+            if isinstance(token, dict):
+                _shift_timed_item(token, offset)
+    shifted["manual_line_offset_seconds"] = round(offset, 3)
+    shifted["manual_line_offset_range"] = [start, end]
+    return shifted
+
+
 def update_alignment_lines(alignment: dict[str, Any], updates: list[dict[str, Any]]) -> dict[str, Any]:
     edited = copy.deepcopy(alignment)
     lines = edited.get("lines") or []

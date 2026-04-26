@@ -43,6 +43,7 @@ Run probe, generate previews, listen, then choose another track:
 ```bash
 ktv probe SONG_ID
 ktv preview-tracks SONG_ID --start 30 --duration 20
+ktv preview-tracks SONG_ID --preset chorus --count 3 --duration 12
 ktv extract SONG_ID --audio-index 1
 ktv separate SONG_ID
 ```
@@ -60,6 +61,15 @@ library/work/{song_id}/logs/separate.log
 The song detail page links to the same log after separation starts. First runs can be slow because Demucs downloads model weights.
 
 Queued and running jobs can be canceled from the Web job table. Failed or canceled jobs can be retried from the same table. If cancellation is requested, the app writes `library/jobs/{job_id}.cancel` and supported subprocesses terminate cleanly.
+
+If the app restarts after a stage already finished writing its output, `checkpoints.json` lets job recovery mark the job complete instead of repeating that stage.
+
+Try a specific device if automatic acceleration fails:
+
+```bash
+ktv separate SONG_ID --device cpu
+ktv separate SONG_ID --device mps
+```
 
 ## URL Download Fails
 
@@ -96,6 +106,18 @@ library/output/{song_id}/takes/
 
 Use the Web Outputs panel to label takes, add notes, delete bad takes, or set an older take as current.
 
+If the generated instrumental is too quiet or too loud, make a normalized copy:
+
+```bash
+ktv normalize SONG_ID --target-i -16
+```
+
+To promote it to the current `instrumental.wav`:
+
+```bash
+ktv normalize SONG_ID --target-i -16 --replace-current
+```
+
 ## Need A Short Test MKV
 
 Use duration limits to avoid waiting on a full-song mux:
@@ -127,6 +149,18 @@ ktv settings --preview-start 30 --preview-duration 20 --worker-count 2 --auto-re
 ```
 
 or open `/settings` in the Web UI. Worker count takes effect after restarting the Web server.
+
+## Need Logs In The Package
+
+```bash
+ktv export SONG_ID --include-logs
+```
+
+For a smaller package:
+
+```bash
+ktv export SONG_ID --no-audio --no-takes
+```
 
 ## One-Click Startup Does Not Open
 

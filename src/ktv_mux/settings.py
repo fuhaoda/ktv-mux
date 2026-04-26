@@ -9,6 +9,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "worker_count": 2,
     "preview_start": 0.0,
     "preview_duration": 20.0,
+    "preview_count": 1,
+    "preview_spacing": 45.0,
+    "preview_preset": "manual",
+    "demucs_model": "htdemucs",
+    "demucs_device": "auto",
+    "normalize_target_i": -16.0,
     "auto_refresh_seconds": 3,
 }
 
@@ -19,6 +25,12 @@ def load_settings(library: LibraryPaths) -> dict[str, Any]:
     settings["worker_count"] = max(1, int(settings.get("worker_count") or DEFAULT_SETTINGS["worker_count"]))
     settings["preview_start"] = max(0.0, float(settings.get("preview_start") or 0.0))
     settings["preview_duration"] = max(1.0, float(settings.get("preview_duration") or DEFAULT_SETTINGS["preview_duration"]))
+    settings["preview_count"] = max(1, int(settings.get("preview_count") or DEFAULT_SETTINGS["preview_count"]))
+    settings["preview_spacing"] = max(1.0, float(settings.get("preview_spacing") or DEFAULT_SETTINGS["preview_spacing"]))
+    settings["preview_preset"] = str(settings.get("preview_preset") or DEFAULT_SETTINGS["preview_preset"])
+    settings["demucs_model"] = str(settings.get("demucs_model") or DEFAULT_SETTINGS["demucs_model"])
+    settings["demucs_device"] = str(settings.get("demucs_device") or DEFAULT_SETTINGS["demucs_device"])
+    settings["normalize_target_i"] = float(settings.get("normalize_target_i") or DEFAULT_SETTINGS["normalize_target_i"])
     settings["auto_refresh_seconds"] = max(1, int(settings.get("auto_refresh_seconds") or DEFAULT_SETTINGS["auto_refresh_seconds"]))
     return settings
 
@@ -29,6 +41,12 @@ def save_settings(library: LibraryPaths, values: dict[str, Any]) -> dict[str, An
     settings["worker_count"] = max(1, int(settings["worker_count"]))
     settings["preview_start"] = max(0.0, float(settings["preview_start"]))
     settings["preview_duration"] = max(1.0, float(settings["preview_duration"]))
+    settings["preview_count"] = max(1, int(settings["preview_count"]))
+    settings["preview_spacing"] = max(1.0, float(settings["preview_spacing"]))
+    settings["preview_preset"] = str(settings["preview_preset"])
+    settings["demucs_model"] = str(settings["demucs_model"])
+    settings["demucs_device"] = str(settings["demucs_device"])
+    settings["normalize_target_i"] = float(settings["normalize_target_i"])
     settings["auto_refresh_seconds"] = max(1, int(settings["auto_refresh_seconds"]))
     write_json(library.settings_json(), settings)
     return settings

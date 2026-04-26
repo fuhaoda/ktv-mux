@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from .checkpoints import stage_checkpoint_completed
 from .jsonio import read_json, write_json
 from .models import append_stage_status, utc_now
 from .paths import LibraryPaths, normalize_song_id
@@ -146,6 +147,13 @@ class LocalJobRunner:
                 self._save(job)
                 continue
             if job.state in {"queued", "running"}:
+                if job.state == "running" and stage_checkpoint_completed(self.library, job.song_id, job.stage):
+                    job.state = "completed"
+                    job.message = "recovered from completed checkpoint"
+                    job.progress = 100
+                    job.updated_at = utc_now()
+                    self._save(job)
+                    continue
                 job.state = "queued"
                 job.message = "recovered after app start"
                 job.updated_at = utc_now()
@@ -226,14 +234,29 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
             job.song_id,
             duration=float(params.get("duration", 20.0)),
             start=float(params.get("start", 0.0)),
+            count=int(params.get("count", 1)),
+            spacing=float(params.get("spacing", 45.0)),
+            preset=str(params.get("preset", "manual")),
             cancel_file=cancel_file,
         )
     elif job.stage == "separate":
-        pipeline.separate(job.song_id, model=str(params.get("model", "htdemucs")), cancel_file=cancel_file)
+        pipeline.separate(
+            job.song_id,
+            model=str(params.get("model", "htdemucs")),
+            device=params.get("device"),
+            cancel_file=cancel_file,
+        )
     elif job.stage == "align":
         pipeline.align(job.song_id, backend=str(params.get("backend", "auto")))
     elif job.stage == "shift-subtitles":
         pipeline.shift_subtitles(job.song_id, seconds=float(params.get("seconds", 0.0)))
+    elif job.stage == "shift-subtitle-lines":
+        pipeline.shift_subtitle_lines(
+            job.song_id,
+            start_line=int(params.get("start_line", 1)) - 1,
+            end_line=int(params.get("end_line", 1)) - 1,
+            seconds=float(params.get("seconds", 0.0)),
+        )
     elif job.stage == "edit-subtitles":
         pipeline.edit_subtitles(job.song_id, list(params.get("updates") or []))
     elif job.stage == "mux":
@@ -249,6 +272,13 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
             keep_audio_index=int(params.get("keep_audio_index", 0)),
             copy_subtitles=bool(params.get("copy_subtitles", True)),
             duration_limit=_float_or_none(params.get("duration_limit")),
+            cancel_file=cancel_file,
+        )
+    elif job.stage == "normalize":
+        pipeline.normalize_instrumental(
+            job.song_id,
+            target_i=float(params.get("target_i", -16.0)),
+            replace_current=bool(params.get("replace_current", False)),
             cancel_file=cancel_file,
         )
     elif job.stage == "clean-work":

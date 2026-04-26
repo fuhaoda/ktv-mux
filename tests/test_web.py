@@ -42,6 +42,8 @@ def test_detail_exposes_separate_steps_and_management(tmp_path):
     assert "Shift ASS" in response.text
     assert "Preview Tracks" in response.text
     assert "Start seconds" in response.text
+    assert "Segments" in response.text
+    assert "Device" in response.text
     assert "Next Actions" in response.text
     assert "Metadata" in response.text
     assert "Diagnostics" in response.text
@@ -62,6 +64,7 @@ def test_settings_page_updates_preview_defaults(tmp_path):
     assert response.status_code == 303
     page = client.get("/settings")
     assert 'value="12.000"' in page.text
+    assert "Demucs device" in page.text
 
 
 def test_metadata_route_updates_song(tmp_path):

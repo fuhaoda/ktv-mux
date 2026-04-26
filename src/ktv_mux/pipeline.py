@@ -9,12 +9,21 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .alignment import align_lyrics, shift_alignment, update_alignment_lines
+from .alignment import align_lyrics, shift_alignment, shift_alignment_lines, update_alignment_lines
 from .ass import build_ass
+from .checkpoints import record_stage_checkpoint
 from .errors import PipelineStateError
 from .jsonio import read_json, write_json
 from .library import import_source, load_song, save_lyrics_file
-from .media import extract_mix, extract_preview, mux_ktv, probe_media, replace_audio_track, run_demucs_two_stems
+from .media import (
+    extract_mix,
+    extract_preview,
+    mux_ktv,
+    normalize_wav,
+    probe_media,
+    replace_audio_track,
+    run_demucs_two_stems,
+)
 from .models import Song, append_stage_status, update_report, utc_now
 from .paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
 from .quality import separation_quality_report
@@ -106,6 +115,9 @@ class Pipeline:
         *,
         duration: float = 20.0,
         start: float = 0.0,
+        count: int = 1,
+        spacing: float = 45.0,
+        preset: str = "manual",
         cancel_file: Path | None = None,
     ) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
@@ -115,20 +127,30 @@ class Pipeline:
             info = probe_media(source)
             _validate_probe_has_required_streams(info)
             previews = []
+            starts = _preview_starts(info.get("duration"), start=start, count=count, spacing=spacing, preset=preset)
             for audio_index, stream in enumerate(info["audio_streams"]):
-                out = self.library.track_preview_wav(clean_id, audio_index)
-                extract_preview(source, out, audio_index=audio_index, duration=duration, start=start, cancel_file=cancel_file)
-                previews.append(
-                    {
-                        "audio_index": audio_index,
-                        "track": audio_index + 1,
-                        "path": str(out),
-                        "start": start,
-                        "duration": duration,
-                        "codec": stream.get("codec_name"),
-                        "language": (stream.get("tags") or {}).get("language"),
-                    }
-                )
+                for segment_index, segment_start in enumerate(starts):
+                    out = self.library.track_preview_wav(clean_id, audio_index, segment_index)
+                    extract_preview(
+                        source,
+                        out,
+                        audio_index=audio_index,
+                        duration=duration,
+                        start=segment_start,
+                        cancel_file=cancel_file,
+                    )
+                    previews.append(
+                        {
+                            "audio_index": audio_index,
+                            "track": audio_index + 1,
+                            "segment": segment_index + 1,
+                            "path": str(out),
+                            "start": segment_start,
+                            "duration": duration,
+                            "codec": stream.get("codec_name"),
+                            "language": (stream.get("tags") or {}).get("language"),
+                        }
+                    )
             update_report(
                 self.library.report_json(clean_id),
                 probe={
@@ -145,7 +167,14 @@ class Pipeline:
 
         return self._run_stage(clean_id, "preview-tracks", stage)
 
-    def separate(self, song_id: str, *, model: str = "htdemucs", cancel_file: Path | None = None) -> dict[str, Any]:
+    def separate(
+        self,
+        song_id: str,
+        *,
+        model: str = "htdemucs",
+        device: str | None = None,
+        cancel_file: Path | None = None,
+    ) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
         mix = self._require_file(self.library.mix_wav(clean_id), "Run extract before separate.")
 
@@ -156,6 +185,7 @@ class Pipeline:
                 self.library.instrumental_wav(clean_id),
                 self.library.vocals_wav(clean_id),
                 model=model,
+                device=device,
                 log_path=self.library.stage_log(clean_id, "separate"),
                 cancel_file=cancel_file,
             )
@@ -167,7 +197,14 @@ class Pipeline:
                     instrumental_wav=self.library.instrumental_wav(clean_id),
                     vocals_wav=self.library.vocals_wav(clean_id),
                 ),
-                instrumental_take=str(_archive_take(self.library, clean_id, self.library.instrumental_wav(clean_id))),
+                instrumental_take=str(
+                    _archive_take(
+                        self.library,
+                        clean_id,
+                        self.library.instrumental_wav(clean_id),
+                        label=f"{result.get('model')} / {result.get('requested_device')}",
+                    )
+                ),
             )
             return result
 
@@ -229,6 +266,41 @@ class Pipeline:
             return shifted
 
         return self._run_stage(clean_id, "shift-subtitles", stage)
+
+    def shift_subtitle_lines(
+        self,
+        song_id: str,
+        *,
+        start_line: int,
+        end_line: int,
+        seconds: float,
+    ) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        alignment_path = self._require_file(
+            self.library.alignment_json(clean_id),
+            "Run align before shifting subtitle lines.",
+        )
+
+        def stage() -> dict[str, Any]:
+            alignment = read_json(alignment_path, default={}) or {}
+            shifted = shift_alignment_lines(
+                alignment,
+                start_index=start_line,
+                end_index=end_line,
+                offset_seconds=seconds,
+            )
+            write_json(alignment_path, shifted)
+            ass_text = build_ass(shifted, title=clean_id)
+            self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
+            self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
+            update_report(
+                self.library.report_json(clean_id),
+                subtitle_line_shift_seconds=seconds,
+                subtitle_line_shift_range=[start_line, end_line],
+            )
+            return shifted
+
+        return self._run_stage(clean_id, "shift-subtitle-lines", stage)
 
     def edit_subtitles(self, song_id: str, updates: list[dict[str, Any]]) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
@@ -336,6 +408,37 @@ class Pipeline:
 
         return self._run_stage(clean_id, "replace-audio", stage)
 
+    def normalize_instrumental(
+        self,
+        song_id: str,
+        *,
+        target_i: float = -16.0,
+        replace_current: bool = False,
+        cancel_file: Path | None = None,
+    ) -> Path:
+        clean_id = normalize_song_id(song_id)
+        source = self._require_file(self.library.instrumental_wav(clean_id), "Run separate before normalize.")
+        output = self.library.normalized_instrumental_wav(clean_id)
+
+        def stage() -> Path:
+            result = normalize_wav(source, output, target_i=target_i, cancel_file=cancel_file)
+            if replace_current:
+                shutil.copy2(result, source)
+                current = source
+            else:
+                current = result
+            update_report(
+                self.library.report_json(clean_id),
+                normalized_instrumental=str(result),
+                normalization={"target_i": target_i, "replaced_current": replace_current},
+                normalized_instrumental_take=str(
+                    _archive_take(self.library, clean_id, current, label=f"normalized {target_i:g} LUFS")
+                ),
+            )
+            return current
+
+        return self._run_stage(clean_id, "normalize", stage)
+
     def clean_work(self, song_id: str) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
 
@@ -392,6 +495,41 @@ class Pipeline:
                 results.append({"song_id": song_id, "error": str(exc)})
         return results
 
+    def batch_stage(self, stage: str, *, raw_root: Path | None = None, **params: Any) -> list[dict[str, Any]]:
+        root = raw_root or self.library.raw_root
+        results: list[dict[str, Any]] = []
+        if not root.exists():
+            return results
+        for song_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+            song_id = normalize_song_id(song_dir.name)
+            try:
+                if stage == "probe":
+                    result = self.probe(song_id)
+                elif stage == "preview-tracks":
+                    result = self.preview_tracks(
+                        song_id,
+                        duration=float(params.get("duration", 20.0)),
+                        start=float(params.get("start", 0.0)),
+                        count=int(params.get("count", 1)),
+                        spacing=float(params.get("spacing", 45.0)),
+                        preset=str(params.get("preset", "manual")),
+                    )
+                elif stage == "extract":
+                    result = self.extract(song_id, audio_index=int(params.get("audio_index", 0)))
+                elif stage == "separate":
+                    result = self.separate(
+                        song_id,
+                        model=str(params.get("model", "htdemucs")),
+                        device=params.get("device"),
+                    )
+                else:
+                    raise PipelineStateError(f"Unsupported batch stage: {stage}")
+                results.append({"song_id": song_id, "stage": stage, "result": result})
+            except Exception as exc:
+                update_report(self.library.report_json(song_id), failure=str(exc), failed_stage=stage)
+                results.append({"song_id": song_id, "stage": stage, "error": str(exc)})
+        return results
+
     def _run_stage(self, song_id: str, stage_name: str, func: StageFunc) -> Any:
         clean_id = normalize_song_id(song_id)
         self.library.ensure_song_dirs(clean_id)
@@ -401,10 +539,26 @@ class Pipeline:
             try:
                 result = func()
             except Exception as exc:
+                record_stage_checkpoint(
+                    self.library,
+                    clean_id,
+                    stage_name,
+                    state="failed",
+                    outputs=_stage_outputs(self.library, clean_id, stage_name),
+                    message=str(exc),
+                )
                 append_stage_status(self.library.status_json(clean_id), stage_name, "failed", str(exc))
                 update_report(self.library.report_json(clean_id), failure=str(exc), failed_stage=stage_name)
                 raise
             elapsed = round(perf_counter() - start, 3)
+            record_stage_checkpoint(
+                self.library,
+                clean_id,
+                stage_name,
+                state="completed",
+                outputs=_stage_outputs(self.library, clean_id, stage_name),
+                message=f"completed in {elapsed}s",
+            )
             append_stage_status(
                 self.library.status_json(clean_id),
                 stage_name,
@@ -435,6 +589,51 @@ class Pipeline:
 def _probe_duration(path: Path) -> float:
     info = probe_media(path)
     return float(info.get("duration") or 0.0)
+
+
+def _preview_starts(
+    media_duration: Any,
+    *,
+    start: float,
+    count: int,
+    spacing: float,
+    preset: str,
+) -> list[float]:
+    duration = float(media_duration or 0.0)
+    base = max(0.0, float(start or 0.0))
+    if preset == "chorus" and duration > 0:
+        base = max(0.0, duration * 0.4)
+    total = max(1, int(count or 1))
+    gap = max(1.0, float(spacing or 45.0))
+    starts = []
+    for index in range(total):
+        candidate = base + index * gap
+        if duration > 0:
+            candidate = min(candidate, max(0.0, duration - 1.0))
+        starts.append(round(candidate, 3))
+    return starts
+
+
+def _stage_outputs(library: LibraryPaths, song_id: str, stage: str) -> list[Path]:
+    if stage == "import":
+        return library.source_candidates(song_id)
+    if stage == "probe":
+        return [library.report_json(song_id)]
+    if stage == "extract":
+        return [library.mix_wav(song_id)]
+    if stage == "preview-tracks":
+        return sorted(library.previews_dir(song_id).glob("track-*.wav"))
+    if stage == "separate":
+        return [library.instrumental_wav(song_id), library.vocals_wav(song_id)]
+    if stage in {"align", "shift-subtitles", "shift-subtitle-lines", "edit-subtitles"}:
+        return [library.alignment_json(song_id), library.lyrics_ass(song_id)]
+    if stage == "mux":
+        return [library.final_mkv(song_id)]
+    if stage == "replace-audio":
+        return [library.audio_replaced_mkv(song_id)]
+    if stage == "normalize":
+        return [library.normalized_instrumental_wav(song_id)]
+    return []
 
 
 def _import_and_report(
@@ -496,14 +695,14 @@ def _validate_probe_has_required_streams(info: dict[str, Any]) -> None:
         raise PipelineStateError("Source media has no audio stream.")
 
 
-def _archive_take(library: LibraryPaths, song_id: str, path: Path) -> Path:
+def _archive_take(library: LibraryPaths, song_id: str, path: Path, *, label: str = "") -> Path:
     if not path.exists():
         return path
     stamp = utc_now().replace("+00:00", "Z").replace(":", "").replace("-", "")
     take = library.takes_dir(song_id) / f"{path.stem}.{stamp}{path.suffix}"
     take.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, take)
-    record_take(library, song_id, take)
+    record_take(library, song_id, take, label=label)
     return take
 
 

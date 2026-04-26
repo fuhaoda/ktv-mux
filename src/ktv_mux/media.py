@@ -193,15 +193,17 @@ def run_demucs_two_stems(
     output_vocals: Path,
     *,
     model: str = "htdemucs",
+    device: str | None = None,
     log_path: Path | None = None,
     cancel_file: Path | None = None,
 ) -> dict[str, Any]:
     demucs_root = work_dir / "demucs"
     demucs_root.mkdir(parents=True, exist_ok=True)
-    device = detect_torch_device()
+    detected_device = detect_torch_device()
+    requested_device = None if device in {None, "", "auto"} else str(device)
     attempted: list[str | None] = []
 
-    for candidate in _device_attempts(device):
+    for candidate in _device_attempts(requested_device or detected_device):
         attempted.append(candidate)
         try:
             cmd = build_demucs_cmd(mix_wav, demucs_root, model=model, device=candidate)
@@ -229,6 +231,8 @@ def run_demucs_two_stems(
     shutil.copy2(vocals, output_vocals)
     return {
         "model": model,
+        "requested_device": requested_device or "auto",
+        "detected_device": detected_device,
         "attempted_devices": attempted,
         "instrumental": str(output_instrumental),
         "vocals": str(output_vocals),
@@ -434,3 +438,42 @@ def replace_audio_track(
         cancel_file=cancel_file,
     )
     return output_mkv
+
+
+def build_normalize_wav_cmd(
+    input_wav: Path,
+    output_wav: Path,
+    *,
+    target_i: float = -16.0,
+    target_tp: float = -1.5,
+    target_lra: float = 11.0,
+) -> list[str]:
+    return [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i",
+        str(input_wav),
+        "-af",
+        f"loudnorm=I={target_i:.1f}:TP={target_tp:.1f}:LRA={target_lra:.1f}",
+        "-ac",
+        "2",
+        "-ar",
+        "44100",
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ]
+
+
+def normalize_wav(
+    input_wav: Path,
+    output_wav: Path,
+    *,
+    target_i: float = -16.0,
+    cancel_file: Path | None = None,
+) -> Path:
+    require_command("ffmpeg")
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    run_command(build_normalize_wav_cmd(input_wav, output_wav, target_i=target_i), cancel_file=cancel_file)
+    return output_wav

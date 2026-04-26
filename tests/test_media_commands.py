@@ -3,9 +3,11 @@ from pathlib import Path
 
 from ktv_mux.library import build_ytdlp_cmd
 from ktv_mux.media import (
+    build_demucs_cmd,
     build_extract_mix_cmd,
     build_extract_preview_cmd,
     build_mux_cmd,
+    build_normalize_wav_cmd,
     build_replace_audio_track_cmd,
     parse_probe_json,
 )
@@ -52,6 +54,19 @@ def test_build_extract_preview_cmd_can_start_later():
     cmd = build_extract_preview_cmd(Path("source.mkv"), Path("preview.wav"), start=31.25)
     assert "-ss" in cmd
     assert "31.250" in cmd
+
+
+def test_build_demucs_cmd_can_select_device():
+    cmd = build_demucs_cmd(Path("mix.wav"), Path("demucs"), model="htdemucs_ft", device="cpu")
+    assert "htdemucs_ft" in cmd
+    assert "-d" in cmd
+    assert "cpu" in cmd
+
+
+def test_build_normalize_wav_cmd_uses_loudnorm():
+    cmd = build_normalize_wav_cmd(Path("in.wav"), Path("out.wav"), target_i=-18)
+    assert any("loudnorm=I=-18.0" in part for part in cmd)
+    assert cmd[-1] == "out.wav"
 
 
 def test_build_mux_cmd_has_dual_audio_metadata_and_default_instrumental():

@@ -80,9 +80,10 @@ ktv import PATH_OR_URL [--song-id ID]
 ktv import-many FILE1 FILE2
 ktv metadata SONG_ID --title "Title" --artist "Artist"
 ktv probe SONG_ID
-ktv preview-tracks SONG_ID [--start SECONDS] [--duration SECONDS]
+ktv preview-tracks SONG_ID [--start SECONDS] [--duration SECONDS] [--count 3] [--preset chorus]
 ktv extract SONG_ID --audio-index 0
-ktv separate SONG_ID
+ktv separate SONG_ID [--model htdemucs] [--device auto]
+ktv normalize SONG_ID [--target-i -16] [--replace-current]
 ktv replace-audio SONG_ID --keep-audio-index 0 [--duration-limit SECONDS]
 ktv lyrics SONG_ID lyrics.txt
 ktv align SONG_ID --backend simple
@@ -94,11 +95,12 @@ ktv takes SONG_ID
 ktv take-note SONG_ID FILENAME --label "good" --note "less vocal bleed"
 ktv take-current SONG_ID FILENAME
 ktv take-delete SONG_ID FILENAME
-ktv export SONG_ID
+ktv export SONG_ID [--include-logs] [--no-audio] [--no-mkv] [--no-takes]
 ktv next SONG_ID
 ktv jobs
 ktv jobs-prune
-ktv settings [--preview-start 30 --preview-duration 20 --worker-count 2]
+ktv batch-stage probe|preview-tracks|extract|separate
+ktv settings [--preview-start 30 --preview-duration 20 --preview-count 2 --demucs-device mps]
 ktv delete SONG_ID
 ktv status SONG_ID
 ktv doctor [SONG_ID]
@@ -137,11 +139,13 @@ KTV_RUN_SLOW=1 .venv/bin/python -m pytest -q -m slow
 - Demucs model weights download on first use.
 - Long-running Web stages use a local file-backed job queue under `library/jobs`.
 - Running Web jobs can be canceled; supported subprocesses receive a cancel signal through `library/jobs/{job_id}.cancel`.
+- Stage checkpoints are written under `library/work/{song_id}/checkpoints.json` for better recovery.
 - Finished Web jobs can be pruned from the Web UI or with `ktv jobs-prune`.
 - Demucs logs are written under `library/work/{song_id}/logs/separate.log`.
 - URL download logs are written under `library/work/{song_id}/logs/import.log`.
 - Source track previews are written under `library/work/{song_id}/track-previews`.
 - Each generated audio or MKV output also keeps a versioned copy under `library/output/{song_id}/takes`.
 - `ktv export SONG_ID` creates `library/output/{song_id}/{song_id}.package.zip`.
+- `scripts/ktv-start.command` runs Doctor first and opens `/doctor`.
 - Generated media under `library/` is ignored by git.
 - Only process media you have the right to use.

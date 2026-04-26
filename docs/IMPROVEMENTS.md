@@ -57,3 +57,18 @@ This pass addressed the next ten self-review items.
 8. `ktv export` and the Web Outputs panel can create a ZIP package with outputs, reports, lyrics, and takes.
 9. `ktv import-many` imports several local files in one command, using filenames as song IDs.
 10. Tests and docs now cover the new settings, planner, export, CLI, and Web management paths.
+
+## Fifth Improvement Pass
+
+This pass addressed the next ten self-review items.
+
+1. Pipeline stages now write checkpoints, and recovered running jobs can be marked complete if their expected outputs already exist.
+2. Demucs model and device are configurable from CLI, Web workflow controls, and settings.
+3. Track previews support multi-segment extraction and a chorus-oriented preset.
+4. Subtitle editing now includes range sliders, line-range shifting, and browser draft autosave for lyrics text.
+5. Lyrics file upload handles `.txt`/`.lrc`, preserves the original file, detects common encodings, and records import warnings.
+6. Instrumental loudness normalization is available as a separate CLI/Web stage.
+7. Export ZIPs can include or exclude audio, MKV files, takes, and logs.
+8. Web song pages show inline log tails in addition to log download links.
+9. `ktv batch-stage` supports batch probe, preview, extract, and separate workflows.
+10. The macOS starter runs Doctor first and opens the Doctor page before serving the workbench.

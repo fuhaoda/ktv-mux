@@ -31,3 +31,11 @@ def test_cli_import_many_uses_filenames(tmp_path, capsys):
     assert result == 0
     assert '"song_id": "one"' in captured.out
     assert '"song_id": "two"' in captured.out
+
+
+def test_cli_batch_stage_probe_handles_empty_library(tmp_path, capsys):
+    result = main(["--library", str(tmp_path / "library"), "batch-stage", "probe"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out.strip() == "[]"
