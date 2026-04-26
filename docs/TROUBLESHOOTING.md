@@ -96,6 +96,16 @@ For one bad line, use the Web subtitle timing editor or:
 ktv edit-line SONG_ID --index 0 --start 10.0 --end 13.2 --text "corrected lyric line"
 ```
 
+If a whole section drifts, use the Web line-range stretch form after generating `alignment.json`. Click the waveform after focusing a timing input to fill a time point from the audio timeline.
+
+For timestamped LRC files:
+
+```bash
+ktv align SONG_ID --backend lrc
+```
+
+If `--backend auto` cannot use FunASR, it falls back to draft timing so you can still inspect and edit subtitles.
+
 ## Output Was Overwritten
 
 The latest files keep stable names, but every generated audio/MKV output is copied to:
@@ -128,6 +138,35 @@ ktv mux SONG_ID --duration-limit 30
 ```
 
 The Web replace/mux forms expose the same optional seconds field.
+
+For a full short smoke test with the bundled sample:
+
+```bash
+scripts/smoke_e2e.sh
+```
+
+After muxing, `report.json` includes an MKV audit with stream counts, default tracks, titles, and warnings.
+
+## Need To Resume From The Middle
+
+Use `run-from` when earlier stages are already good:
+
+```bash
+ktv run-from SONG_ID separate
+ktv run-from SONG_ID align --align-backend lrc --duration-limit 30
+```
+
+The Web Workflow panel has the same `Run From Stage` control.
+
+## Duplicate Or Bad Song ID
+
+Local imports store a lightweight source fingerprint and report possible duplicate source files. Rename a song ID without reimporting:
+
+```bash
+ktv rename OLD_ID NEW_ID
+```
+
+The Web Metadata panel exposes the same rename action.
 
 ## Job List Is Too Noisy
 

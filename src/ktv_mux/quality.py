@@ -50,9 +50,50 @@ def separation_quality_report(
         "vocals": vocals,
         "instrumental_rms_delta_db": _delta(instrumental.get("rms_dbfs"), mix.get("rms_dbfs")),
         "vocals_rms_delta_db": _delta(vocals.get("rms_dbfs"), mix.get("rms_dbfs")),
+        "duration_delta_seconds": _duration_delta(mix, instrumental, vocals),
+        "sample_rate_match": _same_metric("sample_rate", mix, instrumental, vocals),
+        "channel_match": _same_metric("channels", mix, instrumental, vocals),
     }
     report["recommendations"] = quality_recommendations(report)
     return report
+
+
+def mkv_audit_report(
+    info: dict[str, Any],
+    *,
+    expected_audio_streams: int = 2,
+    expected_subtitle_streams: int = 1,
+) -> dict[str, Any]:
+    video = info.get("video_streams") or []
+    audio = info.get("audio_streams") or []
+    subtitles = info.get("subtitle_streams") or []
+    warnings: list[str] = []
+    if not video:
+        warnings.append("No video stream found in output MKV.")
+    if len(audio) < expected_audio_streams:
+        warnings.append(f"Expected at least {expected_audio_streams} audio streams, found {len(audio)}.")
+    if len(subtitles) < expected_subtitle_streams:
+        warnings.append(f"Expected at least {expected_subtitle_streams} subtitle streams, found {len(subtitles)}.")
+    if audio and not any((stream.get("disposition") or {}).get("default") for stream in audio):
+        warnings.append("No default audio stream is marked.")
+    if subtitles and not any((stream.get("disposition") or {}).get("default") for stream in subtitles):
+        warnings.append("No default subtitle stream is marked.")
+    return {
+        "ok": not warnings,
+        "duration": info.get("duration"),
+        "video_streams": len(video),
+        "audio_streams": len(audio),
+        "subtitle_streams": len(subtitles),
+        "audio_titles": [(stream.get("tags") or {}).get("title") for stream in audio],
+        "subtitle_titles": [(stream.get("tags") or {}).get("title") for stream in subtitles],
+        "default_audio_indexes": [
+            index for index, stream in enumerate(audio) if (stream.get("disposition") or {}).get("default")
+        ],
+        "default_subtitle_indexes": [
+            index for index, stream in enumerate(subtitles) if (stream.get("disposition") or {}).get("default")
+        ],
+        "warnings": warnings,
+    }
 
 
 def quality_recommendations(report: dict[str, Any]) -> list[str]:
@@ -62,6 +103,14 @@ def quality_recommendations(report: dict[str, Any]) -> list[str]:
     mix = report.get("mix") or {}
     if _metric(instrumental, "clipped_ratio") > 0.001 or _metric(mix, "clipped_ratio") > 0.001:
         recommendations.append("Clipping detected. Lower the source or stem gain before muxing.")
+    if _metric(vocals, "clipped_ratio") > 0.001:
+        recommendations.append("Vocal stem clipping detected. Re-run separation or normalize before review.")
+    if report.get("duration_delta_seconds") is not None and float(report["duration_delta_seconds"]) > 0.5:
+        recommendations.append("Stem duration does not match the source mix. Re-run extract and separation.")
+    if report.get("sample_rate_match") is False:
+        recommendations.append("Stem sample rates differ. Re-render WAV files before muxing.")
+    if report.get("channel_match") is False:
+        recommendations.append("Stem channel layouts differ. Re-render WAV files before muxing.")
     if _metric(instrumental, "silence_ratio") > 0.2:
         recommendations.append("Instrumental contains long silence. Check that the selected source track is correct.")
     instrumental_rms = instrumental.get("rms_dbfs")
@@ -88,6 +137,20 @@ def _delta(value: Any, base: Any) -> float | None:
     if value is None or base is None:
         return None
     return round(float(value) - float(base), 2)
+
+
+def _duration_delta(*items: dict[str, Any]) -> float | None:
+    durations = [float(item["duration"]) for item in items if item.get("duration") is not None]
+    if len(durations) < 2:
+        return None
+    return round(max(durations) - min(durations), 3)
+
+
+def _same_metric(key: str, *items: dict[str, Any]) -> bool | None:
+    values = [item.get(key) for item in items if item.get(key) is not None]
+    if len(values) < 2:
+        return None
+    return len(set(values)) == 1
 
 
 def _metric(data: dict[str, Any], key: str) -> float:

@@ -44,6 +44,14 @@ Output:
 library/output/朋友-周华健/instrumental.wav
 ```
 
+For a deterministic end-to-end smoke test that does not run Demucs, use:
+
+```bash
+scripts/smoke_e2e.sh
+```
+
+It imports the bundled MKV into a temporary library, creates source previews, extracts audio, uses LRC timestamps for subtitles, muxes a 3-second MKV, and verifies the final stream counts with `ffprobe`.
+
 ## Track Numbering
 
 The Web UI shows `Track 1`, `Track 2`, etc.
@@ -147,6 +155,14 @@ ktv edit-line 朋友-周华健 --index 0 --start 8.5 --end 11.2 --text "朋友�
 ktv mux 朋友-周华健
 ```
 
+If your lyrics file is timestamped `.lrc`, upload or save it with `ktv lyrics`, then use:
+
+```bash
+ktv align 朋友-周华健 --backend lrc
+```
+
+`--backend auto` prefers saved LRC timing when available, tries FunASR when installed, and falls back to draft timing instead of blocking the workflow.
+
 The `simple` backend creates draft timings without downloading alignment models. Install the full ML extra when you want FunASR:
 
 ```bash
@@ -155,6 +171,7 @@ ktv align 朋友-周华健 --backend funasr
 ```
 
 Use a positive shift when subtitles appear too early; use a negative shift when they appear too late. The Web detail page also exposes a line-level timing editor after `align` creates `alignment.json`.
+The same editor supports line-range shifting, line-range stretching, and clicking the waveform to fill the focused time input.
 
 LRC timestamps become initial subtitle timing when lyrics are saved; simple chord tags are cleaned from the stored `lyrics.txt`:
 
@@ -204,6 +221,15 @@ ktv batch-stage probe
 ktv batch-stage preview-tracks --preset chorus --count 2
 ktv batch-stage extract --audio-index 0
 ktv batch-stage separate --model htdemucs --device auto
+ktv batch-stage probe --dry-run
+ktv batch-stage separate --skip-completed --limit 5 --stop-on-error
+```
+
+Resume the main pipeline from a specific point:
+
+```bash
+ktv run-from 朋友-周华健 separate --device mps
+ktv run-from 朋友-周华健 align --align-backend lrc --duration-limit 30
 ```
 
 Run local diagnostics:
@@ -212,6 +238,16 @@ Run local diagnostics:
 ktv doctor
 ktv doctor 朋友-周华健
 ```
+
+The Doctor page includes concrete fix commands for missing FFmpeg, yt-dlp, Demucs, FunASR, or the wrong Python version.
+
+Rename a song ID after import:
+
+```bash
+ktv rename old-id new-id
+```
+
+Local imports record a source fingerprint in `report.json` and show possible duplicate source files on the song page.
 
 ## Cleanup
 

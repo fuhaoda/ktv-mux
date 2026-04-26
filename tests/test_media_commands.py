@@ -81,6 +81,7 @@ def test_build_mux_cmd_has_dual_audio_metadata_and_default_instrumental():
     assert "title=伴奏" in cmd
     assert "title=原唱" in cmd
     assert "title=歌词" in cmd
+    assert "-disposition:s:0" in cmd
     assert cmd[-1] == "out.mkv"
 
 

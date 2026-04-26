@@ -1,6 +1,6 @@
 from ktv_mux.alignment import generate_even_alignment
 from ktv_mux.jsonio import read_json, write_json
-from ktv_mux.library import delete_song, import_source, save_lyrics_file, save_lyrics_text, song_summary
+from ktv_mux.library import delete_song, import_source, rename_song, save_lyrics_file, save_lyrics_text, song_summary
 from ktv_mux.paths import LibraryPaths
 from ktv_mux.pipeline import Pipeline
 
@@ -15,6 +15,35 @@ def test_import_source_defaults_song_id_to_filename(tmp_path):
     assert song.song_id == "朋友-周华健"
     assert (library.raw_dir("朋友-周华健") / "source.mkv").read_bytes() == b"sample"
     assert song_summary(library, "朋友-周华健")["has_source"] is True
+
+
+def test_import_source_records_duplicate_sources(tmp_path):
+    first = tmp_path / "first.mkv"
+    second = tmp_path / "second.mkv"
+    first.write_bytes(b"same media")
+    second.write_bytes(b"same media")
+    library = LibraryPaths(tmp_path / "library")
+
+    import_source(str(first), library=library)
+    import_source(str(second), library=library)
+
+    report = read_json(library.report_json("second"))
+    assert report["duplicate_sources"][0]["song_id"] == "first"
+
+
+def test_rename_song_moves_library_folders(tmp_path):
+    source = tmp_path / "old.mkv"
+    source.write_bytes(b"sample")
+    library = LibraryPaths(tmp_path / "library")
+    import_source(str(source), library=library)
+    library.mix_wav("old").write_bytes(b"mix")
+
+    song = rename_song(library, "old", "new name")
+
+    assert song.song_id == "new-name"
+    assert not library.raw_dir("old").exists()
+    assert library.source_path("new-name").exists()
+    assert library.mix_wav("new-name").read_bytes() == b"mix"
 
 
 def test_clean_work_keeps_outputs_and_removes_regenerable_files(tmp_path):

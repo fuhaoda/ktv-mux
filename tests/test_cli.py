@@ -39,3 +39,14 @@ def test_cli_batch_stage_probe_handles_empty_library(tmp_path, capsys):
     captured = capsys.readouterr()
     assert result == 0
     assert captured.out.strip() == "[]"
+
+
+def test_cli_batch_stage_dry_run_lists_existing_song(tmp_path, capsys):
+    raw = tmp_path / "library" / "raw" / "song"
+    raw.mkdir(parents=True)
+
+    result = main(["--library", str(tmp_path / "library"), "batch-stage", "probe", "--dry-run"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert '"planned": true' in captured.out

@@ -12,7 +12,7 @@ from .errors import KtvError
 from .exporter import export_song_package
 from .jobs import LocalJobRunner
 from .jsonio import read_json
-from .library import delete_song, song_summary, update_song_metadata
+from .library import delete_song, rename_song, song_summary, update_song_metadata
 from .paths import LibraryPaths
 from .pipeline import Pipeline
 from .planner import next_actions
@@ -38,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     metadata_p.add_argument("song_id")
     metadata_p.add_argument("--title")
     metadata_p.add_argument("--artist")
+
+    rename_p = sub.add_parser("rename", help="rename a song id and move its library folders")
+    rename_p.add_argument("old_song_id")
+    rename_p.add_argument("new_song_id")
 
     lyrics_p = sub.add_parser("lyrics", help="copy lyrics text into the song folder")
     lyrics_p.add_argument("song_id")
@@ -80,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     align_p = sub.add_parser("align", help="align lyrics and generate ASS")
     align_p.add_argument("song_id")
-    align_p.add_argument("--backend", default="auto", choices=["auto", "funasr", "simple"])
+    align_p.add_argument("--backend", default="auto", choices=["auto", "funasr", "simple", "lrc"])
 
     shift_p = sub.add_parser("shift", help="shift generated subtitle timing and rebuild ASS")
     shift_p.add_argument("song_id")
@@ -175,11 +179,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     process_p = sub.add_parser("process", help="run probe/extract/separate/align/mux")
     process_p.add_argument("song_id")
-    process_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple"])
+    process_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple", "lrc"])
+
+    run_from_p = sub.add_parser("run-from", help="run the full pipeline starting from one stage")
+    run_from_p.add_argument("song_id")
+    run_from_p.add_argument("start_stage", choices=["probe", "extract", "separate", "align", "mux"])
+    run_from_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple", "lrc"])
+    run_from_p.add_argument("--audio-index", type=int, default=0)
+    run_from_p.add_argument("--model", default="htdemucs")
+    run_from_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+    run_from_p.add_argument("--duration-limit", type=float, default=None)
 
     batch_p = sub.add_parser("batch", help="process every raw song folder")
     batch_p.add_argument("--root", default=None, help="raw root, defaults to library/raw")
-    batch_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple"])
+    batch_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple", "lrc"])
 
     batch_stage_p = sub.add_parser("batch-stage", help="run one stage for every raw song folder")
     batch_stage_p.add_argument("stage", choices=["probe", "preview-tracks", "extract", "separate"])
@@ -192,6 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
     batch_stage_p.add_argument("--preset", default="manual", choices=["manual", "chorus"])
     batch_stage_p.add_argument("--model", default="htdemucs")
     batch_stage_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+    batch_stage_p.add_argument("--limit", type=int)
+    batch_stage_p.add_argument("--skip-completed", action="store_true")
+    batch_stage_p.add_argument("--stop-on-error", action="store_true")
+    batch_stage_p.add_argument("--dry-run", action="store_true")
 
     status_p = sub.add_parser("status", help="show song status")
     status_p.add_argument("song_id")
@@ -232,6 +249,8 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
         return [pipeline.import_source(source) for source in args.sources]
     if args.command == "metadata":
         return update_song_metadata(library, args.song_id, title=args.title, artist=args.artist)
+    if args.command == "rename":
+        return rename_song(library, args.old_song_id, args.new_song_id)
     if args.command == "lyrics":
         return {"lyrics_path": str(pipeline.set_lyrics(args.song_id, Path(args.lyrics_path)))}
     if args.command == "list":
@@ -359,6 +378,16 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
         return {"deleted": args.song_id}
     if args.command == "process":
         return pipeline.process(args.song_id, align_backend=args.align_backend)
+    if args.command == "run-from":
+        return pipeline.process_from(
+            args.song_id,
+            start_stage=args.start_stage,
+            align_backend=args.align_backend,
+            audio_index=args.audio_index,
+            model=args.model,
+            device=args.device,
+            duration_limit=args.duration_limit,
+        )
     if args.command == "batch":
         raw_root = Path(args.root) if args.root else None
         return pipeline.batch(raw_root=raw_root, align_backend=args.align_backend)
@@ -375,6 +404,10 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
             preset=args.preset,
             model=args.model,
             device=args.device,
+            limit=args.limit,
+            skip_completed=args.skip_completed,
+            stop_on_error=args.stop_on_error,
+            dry_run=args.dry_run,
         )
     if args.command == "status":
         return {

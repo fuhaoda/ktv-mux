@@ -7,6 +7,7 @@ def test_doctor_reports_core_checks(tmp_path):
 
     names = {check["name"] for check in result["checks"]}
     assert {"python", "ffmpeg", "ffprobe"}.issubset(names)
+    assert all("fix" in check for check in result["checks"])
     assert "library" in result
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ from .commands import require_command, run_command, run_command_logged
 from .errors import KtvError
 from .jsonio import read_json, write_json
 from .lyrics import lrc_text_to_alignment, normalize_lyrics_text
-from .models import Song
+from .models import Song, update_report
 from .paths import LibraryPaths, derive_song_id_from_source, is_url, normalize_song_id
 
 
@@ -83,6 +84,12 @@ def record_imported_source(
         song.lyrics_path = str(library.lyrics_txt(clean_id))
     song.status = "imported"
     song.save(library.song_json(clean_id))
+    duplicates = duplicate_sources(library, source, exclude_song_id=clean_id)
+    update_report(
+        library.report_json(clean_id),
+        source_fingerprint=file_fingerprint(source),
+        duplicate_sources=duplicates,
+    )
     return song
 
 
@@ -101,6 +108,43 @@ def update_song_metadata(
     song.title = title if title is not None else song.title
     song.artist = artist if artist is not None else song.artist
     song.save(library.song_json(clean_id))
+    return song
+
+
+def rename_song(library: LibraryPaths, old_song_id: str, new_song_id: str) -> Song:
+    old_id = normalize_song_id(old_song_id)
+    new_id = normalize_song_id(new_song_id)
+    if old_id == new_id:
+        return load_song(library, old_id)
+    if library.raw_dir(new_id).exists() or library.work_dir(new_id).exists() or library.output_dir(new_id).exists():
+        raise KtvError(f"song_id already exists: {new_id}")
+    for old_dir, new_dir in [
+        (library.raw_dir(old_id), library.raw_dir(new_id)),
+        (library.work_dir(old_id), library.work_dir(new_id)),
+        (library.output_dir(old_id), library.output_dir(new_id)),
+    ]:
+        if old_dir.exists():
+            new_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_dir), str(new_dir))
+    library.ensure_song_dirs(new_id)
+
+    try:
+        song = load_song(library, new_id)
+    except FileNotFoundError:
+        song = Song(song_id=new_id)
+    song.song_id = new_id
+    if library.source_candidates(new_id):
+        song.source_path = str(library.source_path(new_id))
+    if library.lyrics_txt(new_id).exists():
+        song.lyrics_path = str(library.lyrics_txt(new_id))
+    song.save(library.song_json(new_id))
+
+    if library.jobs_root.exists():
+        for job_path in library.jobs_root.glob("*.json"):
+            data = read_json(job_path, default={}) or {}
+            if data.get("song_id") == old_id:
+                data["song_id"] = new_id
+                write_json(job_path, data)
     return song
 
 
@@ -171,6 +215,34 @@ def decode_lyrics_bytes(data: bytes) -> tuple[str, str, list[str]]:
             continue
     warnings.append("Lyrics encoding was not recognized; invalid characters were replaced.")
     return data.decode("utf-8", errors="replace"), "utf-8-replace", warnings
+
+
+def file_fingerprint(path: Path, *, head_bytes: int = 16 * 1024 * 1024) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        digest.update(handle.read(head_bytes))
+    return {"size_bytes": size, "sha256_head": digest.hexdigest(), "head_bytes": head_bytes}
+
+
+def duplicate_sources(library: LibraryPaths, source: Path, *, exclude_song_id: str | None = None) -> list[dict[str, str]]:
+    source_fp = file_fingerprint(source)
+    exclude = normalize_song_id(exclude_song_id) if exclude_song_id else None
+    duplicates: list[dict[str, str]] = []
+    for song_id in library.list_song_ids():
+        if exclude and normalize_song_id(song_id) == exclude:
+            continue
+        for candidate in library.source_candidates(song_id):
+            try:
+                candidate_fp = file_fingerprint(candidate)
+            except OSError:
+                continue
+            if (
+                candidate_fp["size_bytes"] == source_fp["size_bytes"]
+                and candidate_fp["sha256_head"] == source_fp["sha256_head"]
+            ):
+                duplicates.append({"song_id": song_id, "path": str(candidate)})
+    return duplicates
 
 
 def delete_song(library: LibraryPaths, song_id: str) -> None:

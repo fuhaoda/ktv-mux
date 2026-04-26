@@ -257,6 +257,14 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
             end_line=int(params.get("end_line", 1)) - 1,
             seconds=float(params.get("seconds", 0.0)),
         )
+    elif job.stage == "stretch-subtitle-lines":
+        pipeline.stretch_subtitle_lines(
+            job.song_id,
+            start_line=int(params.get("start_line", 1)) - 1,
+            end_line=int(params.get("end_line", 1)) - 1,
+            target_start=float(params.get("target_start", 0.0)),
+            target_end=float(params.get("target_end", 1.0)),
+        )
     elif job.stage == "edit-subtitles":
         pipeline.edit_subtitles(job.song_id, list(params.get("updates") or []))
     elif job.stage == "mux":
@@ -285,6 +293,17 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
         pipeline.clean_work(job.song_id)
     elif job.stage == "process":
         pipeline.process(job.song_id, align_backend=str(params.get("align_backend", "auto")), cancel_file=cancel_file)
+    elif job.stage == "process-from":
+        pipeline.process_from(
+            job.song_id,
+            start_stage=str(params.get("start_stage", "probe")),
+            align_backend=str(params.get("align_backend", "auto")),
+            audio_index=int(params.get("audio_index", 0)),
+            model=str(params.get("model", "htdemucs")),
+            device=params.get("device"),
+            duration_limit=_float_or_none(params.get("duration_limit")),
+            cancel_file=cancel_file,
+        )
     else:
         raise ValueError(f"unknown stage: {job.stage}")
 

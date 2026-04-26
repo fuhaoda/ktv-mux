@@ -1,4 +1,11 @@
-from ktv_mux.alignment import generate_even_alignment, shift_alignment, shift_alignment_lines, update_alignment_lines
+from ktv_mux.alignment import (
+    align_lyrics,
+    generate_even_alignment,
+    shift_alignment,
+    shift_alignment_lines,
+    stretch_alignment_lines,
+    update_alignment_lines,
+)
 from ktv_mux.ass import ass_karaoke_text, build_ass, seconds_to_ass_time
 from ktv_mux.lyrics import (
     extract_lrc_entries,
@@ -89,6 +96,29 @@ def test_shift_alignment_lines_only_moves_requested_range():
 
     assert shifted["lines"][0]["start"] == alignment["lines"][0]["start"]
     assert shifted["lines"][1]["start"] == alignment["lines"][1]["start"] + 0.5
+
+
+def test_stretch_alignment_lines_retakes_range_window():
+    alignment = generate_even_alignment(["第一句", "第二句"], duration=8)
+    stretched = stretch_alignment_lines(alignment, start_index=0, end_index=1, target_start=10, target_end=20)
+
+    assert stretched["lines"][0]["start"] == 10
+    assert stretched["lines"][1]["end"] == 20
+    assert stretched["manual_stretch_window"] == [10, 20]
+
+
+def test_align_lyrics_can_use_original_lrc(tmp_path):
+    lyrics = tmp_path / "lyrics.txt"
+    lrc = tmp_path / "lyrics.original.lrc"
+    audio = tmp_path / "audio.wav"
+    lyrics.write_text("第一句\n第二句\n", encoding="utf-8")
+    lrc.write_text("[00:01.00]第一句\n[00:03.00]第二句\n", encoding="utf-8")
+    audio.write_bytes(b"")
+
+    alignment = align_lyrics(audio, lyrics, duration=5, backend="lrc", lrc_path=lrc)
+
+    assert alignment["backend"] == "lrc"
+    assert alignment["lines"][0]["start"] == 1.0
 
 
 def test_update_alignment_lines_retimes_tokens():

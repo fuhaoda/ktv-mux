@@ -42,30 +42,41 @@ def _check_python() -> dict[str, Any]:
         "required": True,
         "detail": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "hint": "Use Python 3.12 for the audio ML stack." if not ok else "",
+        "fix": "python3.12 -m venv .venv && .venv/bin/python -m pip install -U pip && .venv/bin/pip install -e '.[web,dev]'"
+        if not ok
+        else "",
     }
 
 
 def _check_command(name: str, *, required: bool = True) -> dict[str, Any]:
     path = shutil.which(name)
+    fix = ""
+    if not path:
+        fix = {
+            "ffmpeg": "brew install ffmpeg",
+            "ffprobe": "brew install ffmpeg",
+            "yt-dlp": "brew install yt-dlp",
+        }.get(name, f"Install {name} and make sure it is on PATH.")
     return {
         "name": name,
         "ok": bool(path),
         "required": required,
         "detail": path or "not found",
         "hint": f"Install {name} and make sure it is on PATH." if required and not path else "",
+        "fix": fix,
     }
 
 
 def _check_package(name: str, *, required: bool = True) -> dict[str, Any]:
     found = importlib.util.find_spec(name) is not None
+    extra = "ml" if name == "funasr" else "separation"
     return {
         "name": name,
         "ok": found,
         "required": required,
         "detail": "installed" if found else "not installed",
-        "hint": f'Install with: python -m pip install -e ".[{"ml" if name == "funasr" else "separation"}]"'
-        if not found
-        else "",
+        "hint": f'Install with: python -m pip install -e ".[{extra}]"' if not found else "",
+        "fix": f'.venv/bin/pip install -e ".[{extra}]"' if not found else "",
     }
 
 

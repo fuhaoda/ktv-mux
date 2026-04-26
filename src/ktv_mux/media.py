@@ -319,6 +319,8 @@ def build_mux_cmd(
         "title=歌词",
         "-metadata:s:s:0",
         "language=zho",
+        "-disposition:s:0",
+        "default",
         ]
     )
     if duration_limit is not None:

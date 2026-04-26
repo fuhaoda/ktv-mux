@@ -72,3 +72,18 @@ This pass addressed the next ten self-review items.
 8. Web song pages show inline log tails in addition to log download links.
 9. `ktv batch-stage` supports batch probe, preview, extract, and separate workflows.
 10. The macOS starter runs Doctor first and opens the Doctor page before serving the workbench.
+
+## Sixth Improvement Pass
+
+This pass addressed the next ten self-review items.
+
+1. `scripts/smoke_e2e.sh` now runs a real short import/probe/preview/extract/LRC-align/mux/ffprobe validation flow.
+2. WAV quality reports now flag duration mismatches, channel mismatches, sample-rate mismatches, vocal clipping, and existing level issues.
+3. CLI/Web can run the pipeline from a selected stage with `run-from` / `process-from`, complementing existing cancel and retry.
+4. Import UX now has drag-and-drop upload styling, recent import records, duplicate source fingerprints, and song ID rename.
+5. Subtitle editing now supports waveform click-to-time and line-range stretching in addition to edits and shifts.
+6. Alignment supports explicit `lrc` backend and `auto` now prefers saved LRC timing before falling back to draft timing.
+7. Web job tables show updated time and expected output hints for better status visibility.
+8. Mux and replace-audio outputs are probed after creation and audited into `report.json`.
+9. `doctor` checks include concrete fix commands for missing runtime dependencies.
+10. Docs now include a deterministic bundled-sample smoke workflow and updated command reference.

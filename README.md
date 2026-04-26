@@ -79,6 +79,7 @@ library/output/朋友-周华健/朋友-周华健.audio-replaced.mkv
 ktv import PATH_OR_URL [--song-id ID]
 ktv import-many FILE1 FILE2
 ktv metadata SONG_ID --title "Title" --artist "Artist"
+ktv rename OLD_SONG_ID NEW_SONG_ID
 ktv probe SONG_ID
 ktv preview-tracks SONG_ID [--start SECONDS] [--duration SECONDS] [--count 3] [--preset chorus]
 ktv extract SONG_ID --audio-index 0
@@ -86,10 +87,11 @@ ktv separate SONG_ID [--model htdemucs] [--device auto]
 ktv normalize SONG_ID [--target-i -16] [--replace-current]
 ktv replace-audio SONG_ID --keep-audio-index 0 [--duration-limit SECONDS]
 ktv lyrics SONG_ID lyrics.txt
-ktv align SONG_ID --backend simple
+ktv align SONG_ID --backend simple|lrc|funasr
 ktv shift SONG_ID --seconds 0.35
 ktv edit-line SONG_ID --index 0 --start 10.2 --end 13.4 --text "第一句歌词"
 ktv mux SONG_ID [--duration-limit SECONDS]
+ktv run-from SONG_ID separate
 ktv clean-work SONG_ID
 ktv takes SONG_ID
 ktv take-note SONG_ID FILENAME --label "good" --note "less vocal bleed"
@@ -99,7 +101,7 @@ ktv export SONG_ID [--include-logs] [--no-audio] [--no-mkv] [--no-takes]
 ktv next SONG_ID
 ktv jobs
 ktv jobs-prune
-ktv batch-stage probe|preview-tracks|extract|separate
+ktv batch-stage probe|preview-tracks|extract|separate [--dry-run] [--skip-completed] [--limit N]
 ktv settings [--preview-start 30 --preview-duration 20 --preview-count 2 --demucs-device mps]
 ktv delete SONG_ID
 ktv status SONG_ID
@@ -114,6 +116,7 @@ Web `Track 1` is CLI `--audio-index 0`; Web `Track 2` is CLI `--audio-index 1`.
 ## Project Docs
 
 - [Usage](docs/USAGE.md)
+- [Bundled Sample Workflow](docs/SAMPLE_WORKFLOW.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Implemented Improvements](docs/IMPROVEMENTS.md)
@@ -133,6 +136,12 @@ The test suite includes unit tests for path handling, command construction, ASS 
 KTV_RUN_SLOW=1 .venv/bin/python -m pytest -q -m slow
 ```
 
+Run a real short end-to-end FFmpeg smoke without Demucs:
+
+```bash
+scripts/smoke_e2e.sh
+```
+
 ## Notes
 
 - `ffmpeg`, `ffprobe`, and `yt-dlp` are external command dependencies.
@@ -140,6 +149,8 @@ KTV_RUN_SLOW=1 .venv/bin/python -m pytest -q -m slow
 - Long-running Web stages use a local file-backed job queue under `library/jobs`.
 - Running Web jobs can be canceled; supported subprocesses receive a cancel signal through `library/jobs/{job_id}.cancel`.
 - Stage checkpoints are written under `library/work/{song_id}/checkpoints.json` for better recovery.
+- Muxed MKVs are probed after creation and audited in `report.json`.
+- Local imports record a lightweight source fingerprint and possible duplicate sources.
 - Finished Web jobs can be pruned from the Web UI or with `ktv jobs-prune`.
 - Demucs logs are written under `library/work/{song_id}/logs/separate.log`.
 - URL download logs are written under `library/work/{song_id}/logs/import.log`.

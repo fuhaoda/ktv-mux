@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import KtvError, MissingDependencyError
-from .lyrics import parse_lyrics_file, split_tokens
+from .lyrics import lrc_text_to_alignment, parse_lyrics_file, split_tokens
 
 
 def align_lyrics(
@@ -14,25 +14,39 @@ def align_lyrics(
     *,
     duration: float,
     backend: str = "auto",
+    lrc_path: Path | None = None,
 ) -> dict[str, Any]:
     lines = parse_lyrics_file(lyrics_path)
     if not lines:
         raise KtvError(f"lyrics file has no usable lines: {lyrics_path}")
 
-    if backend not in {"auto", "funasr", "simple"}:
+    if backend not in {"auto", "funasr", "simple", "lrc"}:
         raise KtvError(f"unsupported alignment backend: {backend}")
 
+    if backend in {"auto", "lrc"} and lrc_path and lrc_path.exists():
+        alignment = lrc_text_to_alignment(lrc_path.read_text(encoding="utf-8", errors="replace"))
+        if alignment.get("lines"):
+            alignment["backend"] = "lrc"
+            return alignment
+        if backend == "lrc":
+            raise KtvError(f"LRC file has no usable timestamped lyrics: {lrc_path}")
+
+    fallback_warning = "Draft timing generated without a forced-alignment model."
     if backend in {"auto", "funasr"}:
         try:
             return align_with_funasr(audio_path, lyrics_path, lines)
-        except MissingDependencyError:
+        except MissingDependencyError as exc:
             if backend == "funasr":
                 raise
+            fallback_warning = f"FunASR unavailable; used draft timing instead. {exc}"
         except Exception as exc:
             if backend == "funasr":
                 raise KtvError(f"FunASR alignment failed: {exc}") from exc
+            fallback_warning = f"FunASR failed; used draft timing instead. {exc}"
 
-    return generate_even_alignment(lines, duration=duration, backend="simple-even")
+    alignment = generate_even_alignment(lines, duration=duration, backend="simple-even")
+    alignment["warning"] = fallback_warning
+    return alignment
 
 
 def align_with_funasr(audio_path: Path, lyrics_path: Path, lines: list[str]) -> dict[str, Any]:
@@ -223,6 +237,53 @@ def shift_alignment_lines(
     return shifted
 
 
+def stretch_alignment_lines(
+    alignment: dict[str, Any],
+    *,
+    start_index: int,
+    end_index: int,
+    target_start: float,
+    target_end: float,
+) -> dict[str, Any]:
+    stretched = copy.deepcopy(alignment)
+    lines = stretched.get("lines") or []
+    start = max(0, int(start_index))
+    end = min(len(lines) - 1, int(end_index))
+    if start > end or not lines:
+        return stretched
+
+    original_start = _coerce_time(lines[start].get("start"), 0.0)
+    original_end = _coerce_time(lines[end].get("end"), original_start + 0.01)
+    original_span = max(0.01, original_end - original_start)
+    new_start = max(0.0, float(target_start))
+    new_end = max(new_start + 0.01, float(target_end))
+    new_span = new_end - new_start
+
+    for index in range(start, end + 1):
+        line = lines[index]
+        if not isinstance(line, dict):
+            continue
+        _stretch_timed_item(
+            line,
+            original_start=original_start,
+            original_span=original_span,
+            new_start=new_start,
+            new_span=new_span,
+        )
+        for token in line.get("tokens") or []:
+            if isinstance(token, dict):
+                _stretch_timed_item(
+                    token,
+                    original_start=original_start,
+                    original_span=original_span,
+                    new_start=new_start,
+                    new_span=new_span,
+                )
+    stretched["manual_stretch_range"] = [start, end]
+    stretched["manual_stretch_window"] = [round(new_start, 3), round(new_end, 3)]
+    return stretched
+
+
 def update_alignment_lines(alignment: dict[str, Any], updates: list[dict[str, Any]]) -> dict[str, Any]:
     edited = copy.deepcopy(alignment)
     lines = edited.get("lines") or []
@@ -262,6 +323,47 @@ def _shift_time(value: Any, offset: float) -> float:
     except (TypeError, ValueError):
         seconds = 0.0
     return round(max(0.0, seconds + offset), 3)
+
+
+def _stretch_timed_item(
+    item: dict[str, Any],
+    *,
+    original_start: float,
+    original_span: float,
+    new_start: float,
+    new_span: float,
+) -> None:
+    start = _stretch_time(
+        item.get("start"),
+        original_start=original_start,
+        original_span=original_span,
+        new_start=new_start,
+        new_span=new_span,
+    )
+    end = _stretch_time(
+        item.get("end"),
+        original_start=original_start,
+        original_span=original_span,
+        new_start=new_start,
+        new_span=new_span,
+    )
+    if end <= start:
+        end = round(start + 0.01, 3)
+    item["start"] = start
+    item["end"] = end
+
+
+def _stretch_time(
+    value: Any,
+    *,
+    original_start: float,
+    original_span: float,
+    new_start: float,
+    new_span: float,
+) -> float:
+    old = _coerce_time(value, original_start)
+    ratio = (old - original_start) / max(0.01, original_span)
+    return round(max(0.0, new_start + ratio * new_span), 3)
 
 
 def _coerce_time(value: Any, fallback: Any) -> float:

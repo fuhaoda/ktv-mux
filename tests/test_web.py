@@ -44,6 +44,9 @@ def test_detail_exposes_separate_steps_and_management(tmp_path):
     assert "Start seconds" in response.text
     assert "Segments" in response.text
     assert "Device" in response.text
+    assert "Run From Stage" in response.text
+    assert "Rename Song" in response.text
+    assert "Stretch Lines" not in response.text
     assert "Next Actions" in response.text
     assert "Metadata" in response.text
     assert "Diagnostics" in response.text
@@ -77,6 +80,19 @@ def test_metadata_route_updates_song(tmp_path):
 
     assert response.status_code == 303
     assert "朋友" in client.get("/songs/song").text
+
+
+def test_rename_route_moves_song(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+    library.ensure_song_dirs("song")
+    (library.raw_dir("song") / "source.mkv").write_bytes(b"sample")
+    client = TestClient(create_app(library))
+
+    response = client.post("/songs/song/rename", data={"new_song_id": "new song"}, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/songs/new-song"
+    assert library.raw_dir("new-song").exists()
 
 
 def test_waveform_route_returns_svg(tmp_path):

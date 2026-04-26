@@ -29,6 +29,12 @@ class FakePipeline:
     def shift_subtitles(self, song_id, *, seconds=0.0):
         self.calls.append(("shift-subtitles", song_id, seconds))
 
+    def shift_subtitle_lines(self, song_id, *, start_line=0, end_line=0, seconds=0.0):
+        self.calls.append(("shift-subtitle-lines", song_id, start_line, end_line, seconds))
+
+    def stretch_subtitle_lines(self, song_id, *, start_line=0, end_line=0, target_start=0.0, target_end=1.0):
+        self.calls.append(("stretch-subtitle-lines", song_id, start_line, end_line, target_start, target_end))
+
     def mux(self, song_id, *, audio_order="instrumental-first", duration_limit=None, cancel_file=None):
         self.calls.append(("mux", song_id, audio_order, duration_limit, cancel_file is not None))
 
@@ -37,6 +43,32 @@ class FakePipeline:
 
     def replace_audio(self, song_id, *, keep_audio_index=0, copy_subtitles=True, duration_limit=None, cancel_file=None):
         self.calls.append(("replace-audio", song_id, keep_audio_index, copy_subtitles, duration_limit, cancel_file is not None))
+
+    def process_from(
+        self,
+        song_id,
+        *,
+        start_stage="probe",
+        align_backend="auto",
+        audio_index=0,
+        model="htdemucs",
+        device=None,
+        duration_limit=None,
+        cancel_file=None,
+    ):
+        self.calls.append(
+            (
+                "process-from",
+                song_id,
+                start_stage,
+                align_backend,
+                audio_index,
+                model,
+                device,
+                duration_limit,
+                cancel_file is not None,
+            )
+        )
 
 
 def test_job_runner_submit_persists_queue_state(tmp_path):
@@ -144,6 +176,10 @@ def test_run_pipeline_stage_passes_stage_parameters():
         pipeline,
         Job(job_id="replace", song_id="song", stage="replace-audio", params={"keep_audio_index": "1", "duration_limit": "4"}),
     )
+    run_pipeline_stage(
+        pipeline,
+        Job(job_id="from", song_id="song", stage="process-from", params={"start_stage": "separate", "audio_index": "1"}),
+    )
 
     assert pipeline.calls == [
         ("import-url", "song", "https://example.invalid/v", None, None, False),
@@ -152,4 +188,5 @@ def test_run_pipeline_stage_passes_stage_parameters():
         ("shift-subtitles", "song", -0.25),
         ("mux", "song", "instrumental-first", 3.0, False),
         ("replace-audio", "song", 1, True, 4.0, False),
+        ("process-from", "song", "separate", "auto", 1, "htdemucs", None, None, False),
     ]

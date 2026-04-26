@@ -9,6 +9,7 @@ from .jsonio import read_json
 from .library import (
     delete_song,
     record_imported_source,
+    rename_song,
     save_lyrics_file,
     save_lyrics_text,
     song_summary,
@@ -186,6 +187,11 @@ def create_app(library: LibraryPaths | None = None):
         update_song_metadata(library, clean_id, title=title or None, artist=artist or None)
         return RedirectResponse(song_url(clean_id), status_code=303)
 
+    @app.post("/songs/{song_id}/rename")
+    def rename_song_route(song_id: str, new_song_id: str = Form("")):
+        song = rename_song(library, song_id, new_song_id)
+        return RedirectResponse(song_url(song.song_id), status_code=303)
+
     @app.post("/songs/{song_id}/lyrics")
     def save_lyrics(song_id: str, lyrics: str = Form("")):
         save_lyrics_text(library, song_id, lyrics)
@@ -228,6 +234,27 @@ def create_app(library: LibraryPaths | None = None):
         )
         return RedirectResponse(song_url(clean_id), status_code=303)
 
+    @app.post("/songs/{song_id}/alignment-stretch-lines")
+    def stretch_subtitle_lines(
+        song_id: str,
+        start_line: int = Form(1),
+        end_line: int = Form(1),
+        target_start: float = Form(0.0),
+        target_end: float = Form(1.0),
+    ):
+        clean_id = normalize_song_id(song_id)
+        runner.submit(
+            clean_id,
+            "stretch-subtitle-lines",
+            {
+                "start_line": start_line,
+                "end_line": end_line,
+                "target_start": target_start,
+                "target_end": target_end,
+            },
+        )
+        return RedirectResponse(song_url(clean_id), status_code=303)
+
     @app.post("/songs/{song_id}/run/{stage}")
     def run_stage(
         song_id: str,
@@ -244,6 +271,8 @@ def create_app(library: LibraryPaths | None = None):
         device: str = Form("auto"),
         target_i: float = Form(-16.0),
         replace_current: str = Form(""),
+        start_stage: str = Form("probe"),
+        align_backend: str = Form("auto"),
         duration_limit: float = Form(0.0),
     ):
         clean_id = normalize_song_id(song_id)
@@ -258,6 +287,7 @@ def create_app(library: LibraryPaths | None = None):
             "normalize",
             "clean-work",
             "process",
+            "process-from",
         }:
             return PlainTextResponse(f"Unknown stage: {stage}", status_code=400)
         runner.submit(
@@ -276,6 +306,8 @@ def create_app(library: LibraryPaths | None = None):
                 "device": device,
                 "target_i": target_i,
                 "replace_current": bool(replace_current),
+                "start_stage": start_stage,
+                "align_backend": align_backend,
                 "duration_limit": duration_limit or None,
             },
         )
@@ -378,7 +410,7 @@ def create_app(library: LibraryPaths | None = None):
         elif kind.startswith("take/"):
             filename = Path(kind.split("/", 1)[1]).name
             path = library.takes_dir(clean_id) / filename
-        elif kind in {"instrumental", "mix", "vocals"}:
+        elif kind in {"instrumental", "instrumental-normalized", "mix", "vocals"}:
             path = audio_path(library, clean_id, kind)
         else:
             return PlainTextResponse("Download not found", status_code=404)

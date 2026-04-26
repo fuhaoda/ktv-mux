@@ -22,15 +22,17 @@ def page(title: str, body: str, *, auto_refresh: bool = False, refresh_seconds: 
 
 
 def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str:
+    songs = sorted(songs, key=lambda song: str(song.get("updated_at") or song.get("created_at") or ""), reverse=True)
     rows = "\n".join(
         f"<tr><td><a class='song-link' href='{song_url(song['song_id'])}'>{escape(song['song_id'])}</a></td>"
         f"<td>{escape(str(song.get('title') or ''))}</td>"
         f"<td>{escape(str(song.get('artist') or ''))}</td>"
-        f"<td>{render_flags(song)}</td></tr>"
+        f"<td>{render_flags(song)}</td>"
+        f"<td class='compact'>{escape(str(song.get('updated_at') or ''))}</td></tr>"
         for song in songs
     )
     if not rows:
-        rows = "<tr><td colspan='4'><div class='empty'>No songs imported yet.</div></td></tr>"
+        rows = "<tr><td colspan='5'><div class='empty'>No songs imported yet.</div></td></tr>"
     return f"""
 <section class="hero">
   <div>
@@ -41,7 +43,7 @@ def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str
 <section class="grid-2">
   <div class="panel">
     <h2>Choose File</h2>
-    <form method="post" action="/import-upload" enctype="multipart/form-data" class="stack">
+    <form method="post" action="/import-upload" enctype="multipart/form-data" class="stack drop-zone">
       <div class="field-wide"><label>Source files</label><input name="files" type="file" multiple required></div>
       <div class="fields">
         <div><label>Song ID optional</label><input name="song_id" placeholder="defaults to filename"></div>
@@ -67,14 +69,34 @@ def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str
 <section class="panel" style="margin-top:16px;">
   <h2>Library</h2>
   <table>
-    <thead><tr><th>ID</th><th>Title</th><th>Artist</th><th>Files</th></tr></thead>
+    <thead><tr><th>ID</th><th>Title</th><th>Artist</th><th>Files</th><th>Updated</th></tr></thead>
     <tbody>{rows}</tbody>
   </table>
 </section>
+{render_recent_imports(songs)}
 <section class="panel" style="margin-top:16px;">
   <h2>Recent Jobs</h2>
   <form method="post" action="/jobs/prune" style="margin-bottom:10px;"><button class="secondary" type="submit">Prune Finished Jobs</button></form>
   {render_jobs(jobs)}
+</section>
+"""
+
+
+def render_recent_imports(songs: list[dict[str, Any]]) -> str:
+    recent = [song for song in songs if song.get("source_path")][:5]
+    if not recent:
+        return ""
+    rows = "".join(
+        f"<tr><td><a href='{song_url(str(song.get('song_id') or ''))}'>{escape(str(song.get('song_id') or ''))}</a></td>"
+        f"<td>{escape(str(song.get('title') or ''))}</td>"
+        f"<td class='path'>{escape(str(song.get('source_path') or ''))}</td>"
+        f"<td class='compact'>{escape(str(song.get('updated_at') or ''))}</td></tr>"
+        for song in recent
+    )
+    return f"""
+<section class="panel" style="margin-top:16px;">
+  <h2>Recent Imports</h2>
+  <table><thead><tr><th>ID</th><th>Title</th><th>Source</th><th>Updated</th></tr></thead><tbody>{rows}</tbody></table>
 </section>
 """
 
@@ -120,6 +142,7 @@ def render_detail(
   </div>
   <div class="row">{render_flags(summary)} <span class="badge {state_class}">{escape(state)}</span> <span class="badge">{escape(current_stage)}</span></div>
 </section>
+{render_duplicate_warning(report)}
 <section class="grid-2">
   <div class="stack">
     <div class="panel">
@@ -166,7 +189,12 @@ def render_detail(
         </form>
       </div>
       <div class="row" style="margin-top:12px;">
-        <form method="post" action="{song_url(song_id)}/run/process"><button class="secondary" type="submit">Run Full Process</button></form>
+        <form method="post" action="{song_url(song_id)}/run/process"><input type="hidden" name="align_backend" value="auto"><button class="secondary" type="submit">Run Full Process</button></form>
+        <form method="post" action="{song_url(song_id)}/run/process-from" class="row">
+          <select name="start_stage">{render_select_options(["probe", "extract", "separate", "align", "mux"], "separate")}</select>
+          <input type="hidden" name="align_backend" value="auto">
+          <button class="secondary" type="submit">Run From Stage</button>
+        </form>
         <form method="post" action="{song_url(song_id)}/run/normalize" class="row">
           <input class="number-input" name="target_i" type="number" step="0.5" value="{normalize_target_i}">
           <label><input name="replace_current" type="checkbox" value="1" style="width:auto;"> Replace</label>
@@ -193,7 +221,10 @@ def render_detail(
         <button class="secondary" type="submit">Upload lyrics.txt</button>
       </form>
       <div class="row" style="margin-top:12px;">
-        <form method="post" action="{song_url(song_id)}/run/align"><button class="secondary" type="submit">Generate ASS</button></form>
+        <form method="post" action="{song_url(song_id)}/run/align" class="row">
+          <select name="align_backend">{render_select_options(["auto", "lrc", "funasr", "simple"], "auto")}</select>
+          <button class="secondary" type="submit">Generate ASS</button>
+        </form>
         <form method="post" action="{song_url(song_id)}/shift" class="row">
           <input class="number-input" name="seconds" type="number" step="0.05" value="0">
           <button class="secondary" type="submit">Shift ASS</button>
@@ -282,6 +313,19 @@ def render_audio_blocks(song_id: str, summary: dict[str, Any]) -> str:
     return "".join(blocks)
 
 
+def render_duplicate_warning(report: dict[str, Any]) -> str:
+    duplicates = report.get("duplicate_sources") or []
+    if not duplicates:
+        return ""
+    rows = "".join(
+        f"<div><a href='{song_url(str(item.get('song_id') or ''))}'>{escape(str(item.get('song_id') or ''))}</a>"
+        f"<div class='path'>{escape(str(item.get('path') or ''))}</div></div>"
+        for item in duplicates
+        if isinstance(item, dict)
+    )
+    return f"<section class='panel warning-panel' style='margin-bottom:16px;'><h2>Possible Duplicate Source</h2><div class='tight'>{rows}</div></section>"
+
+
 def render_next_actions(song_id: str, actions: list[dict[str, Any]]) -> str:
     rows = []
     runnable = {"probe", "preview-tracks", "extract", "separate", "align", "replace-audio", "mux"}
@@ -305,6 +349,10 @@ def render_metadata_form(song_id: str, summary: dict[str, Any]) -> str:
   <div><label>Title</label><input name="title" value="{escape(str(summary.get("title") or ""))}"></div>
   <div><label>Artist</label><input name="artist" value="{escape(str(summary.get("artist") or ""))}"></div>
   <div><button class="secondary" type="submit">Save Metadata</button></div>
+</form>
+<form method="post" action="{song_url(song_id)}/rename" class="tight" style="margin-top:10px;">
+  <div><label>Song ID</label><input name="new_song_id" value="{escape(song_id)}"></div>
+  <div><button class="secondary" type="submit">Rename Song</button></div>
 </form>
 """
 
@@ -341,6 +389,8 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
     lines = alignment.get("lines") or []
     if not lines:
         return ""
+    line_ends = [float(line.get("end") or 0.0) for line in lines if isinstance(line, dict)]
+    max_time = max(line_ends) if line_ends else 0.0
     rows = []
     for index, item in enumerate(lines[:24]):
         start_id = f"line-{index}-start"
@@ -359,7 +409,7 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
     return f"""
       <div class="tight" style="margin-top:14px;">
         <h3>Subtitle Timing</h3>
-        <img class="waveform" src="{song_url(song_id)}/waveform.svg" alt="Audio waveform">
+        <img class="waveform" data-duration="{fmt_attr(max_time)}" src="{song_url(song_id)}/waveform.svg" alt="Audio waveform">
         <form method="post" action="{song_url(song_id)}/alignment" class="tight">
           <input type="hidden" name="line_count" value="{min(len(lines), 24)}">
           {''.join(rows)}
@@ -371,6 +421,13 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
           <input class="number-input" name="end_line" type="number" min="1" value="{min(len(lines), 24)}">
           <input class="number-input" name="seconds" type="number" step="0.05" value="0">
           <button class="secondary" type="submit">Shift Lines</button>
+        </form>
+        <form method="post" action="{song_url(song_id)}/alignment-stretch-lines" class="row">
+          <input class="number-input" name="start_line" type="number" min="1" value="1">
+          <input class="number-input" name="end_line" type="number" min="1" value="{min(len(lines), 24)}">
+          <input class="number-input" name="target_start" type="number" step="0.05" value="{fmt_attr((lines[0] or {}).get('start'))}">
+          <input class="number-input" name="target_end" type="number" step="0.05" value="{fmt_attr((lines[min(len(lines), 24) - 1] or {}).get('end'))}">
+          <button class="secondary" type="submit">Stretch Lines</button>
         </form>
       </div>
 """
@@ -409,11 +466,29 @@ def render_outputs(
             latest.append(f"<div class='path'>{escape(str(report[key]))}</div>")
     if latest:
         rows.append("<div><strong>Latest versioned copies</strong>" + "".join(latest) + "</div>")
+    audit_blocks = []
+    for key, label in [("final_mkv_audit", "KTV MKV Audit"), ("audio_replaced_mkv_audit", "Audio-Replaced MKV Audit")]:
+        if isinstance(report.get(key), dict):
+            audit_blocks.append(render_mkv_audit(label, report[key]))
+    rows.extend(audit_blocks)
     return "<div class='stack'>" + "".join(rows) + "</div>"
 
 
 def output_row(label: str, href: str, detail: str) -> str:
     return f"<div><div><strong>{escape(label)}</strong></div><div class='subtle'>{escape(detail)}</div><a class='button secondary' href='{href}'>Download</a></div>"
+
+
+def render_mkv_audit(label: str, audit: dict[str, Any]) -> str:
+    state = "ok" if audit.get("ok") else "warn"
+    warnings = audit.get("warnings") or []
+    warning_html = "".join(f"<div class='badge warn'>{escape(str(item))}</div>" for item in warnings)
+    return (
+        f"<div class='tight'><div class='row'><strong>{escape(label)}</strong>"
+        f"<span class='badge {state}'>{'ok' if audit.get('ok') else 'check'}</span></div>"
+        f"<div class='compact'>video {fmt(audit.get('video_streams'))}; audio {fmt(audit.get('audio_streams'))}; "
+        f"subtitle {fmt(audit.get('subtitle_streams'))}; default audio {escape(str(audit.get('default_audio_indexes') or []))}</div>"
+        f"{warning_html}</div>"
+    )
 
 
 def render_take_row(song_id: str, take: dict[str, Any]) -> str:
@@ -463,7 +538,8 @@ def render_quality(report: dict[str, Any]) -> str:
     rows.append(
         f"<div class='subtle'>Instrumental RMS delta: {fmt(quality.get('instrumental_rms_delta_db'))}; "
         f"vocals RMS delta: {fmt(quality.get('vocals_rms_delta_db'))}; "
-        f"instrumental silence: {fmt_percent((quality.get('instrumental') or {}).get('silence_ratio'))}</div>"
+        f"instrumental silence: {fmt_percent((quality.get('instrumental') or {}).get('silence_ratio'))}; "
+        f"duration delta: {fmt(quality.get('duration_delta_seconds'))}s</div>"
     )
     recommendations = quality.get("recommendations") or []
     if recommendations:
@@ -503,16 +579,19 @@ def render_jobs(jobs: list[dict[str, Any]]) -> str:
         )
         progress = int(job.get("progress") or 0)
         actions = render_job_actions(job)
+        output_hint = job_output_hint(str(job.get("stage") or ""))
         rows.append(
             f"<tr><td>{escape(str(job.get('created_at') or ''))}</td>"
+            f"<td class='compact'>{escape(str(job.get('updated_at') or ''))}</td>"
             f"<td><a href='{song_url(str(job.get('song_id') or ''))}'>{escape(str(job.get('song_id') or ''))}</a></td>"
             f"<td>{escape(str(job.get('stage') or ''))}</td>"
             f"<td><span class='badge {state_class}'>{escape(state)}</span></td>"
             f"<td><div class='progress'><span style='width:{progress}%'></span></div><div class='compact'>{progress}%</div></td>"
+            f"<td class='compact'>{escape(output_hint)}</td>"
             f"<td class='compact'>{escape(trim(str(job.get('message') or ''), 160))}</td>"
             f"<td>{actions}</td></tr>"
         )
-    return f"<table><thead><tr><th>Created</th><th>Song</th><th>Stage</th><th>State</th><th>Progress</th><th>Message</th><th>Actions</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return f"<table><thead><tr><th>Created</th><th>Updated</th><th>Song</th><th>Stage</th><th>State</th><th>Progress</th><th>Output</th><th>Message</th><th>Actions</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
 def render_job_actions(job: dict[str, Any]) -> str:
@@ -523,6 +602,21 @@ def render_job_actions(job: dict[str, Any]) -> str:
     if state in {"failed", "canceled"}:
         return f"<form class='mini-form' method='post' action='/jobs/{job_id}/retry'><button class='secondary' type='submit'>Retry</button></form>"
     return ""
+
+
+def job_output_hint(stage: str) -> str:
+    return {
+        "probe": "report.json",
+        "preview-tracks": "track preview WAVs",
+        "extract": "mix.wav",
+        "separate": "instrumental.wav, vocals.wav",
+        "normalize": "instrumental.normalized.wav",
+        "align": "alignment.json, lyrics.ass",
+        "mux": "final KTV MKV",
+        "replace-audio": "audio-replaced MKV",
+        "process": "full pipeline outputs",
+        "process-from": "remaining pipeline outputs",
+    }.get(stage, "")
 
 
 def render_logs(song_id: str, logs: list[str], log_tails: dict[str, str] | None = None) -> str:
@@ -565,7 +659,8 @@ def render_doctor(doctor: dict[str, Any]) -> str:
             f"<tr><td>{escape(str(check.get('name') or ''))}</td>"
             f"<td><span class='badge {state}'>{'ok' if check.get('ok') else 'missing'}</span></td>"
             f"<td>{escape(str(check.get('detail') or ''))}</td>"
-            f"<td class='compact'>{escape(str(check.get('hint') or ''))}</td></tr>"
+            f"<td class='compact'>{escape(str(check.get('hint') or ''))}</td>"
+            f"<td class='path'>{escape(str(check.get('fix') or ''))}</td></tr>"
         )
     return f"""
 <section class="hero">
@@ -574,7 +669,7 @@ def render_doctor(doctor: dict[str, Any]) -> str:
 </section>
 <section class="panel">
   <table>
-    <thead><tr><th>Check</th><th>State</th><th>Detail</th><th>Hint</th></tr></thead>
+    <thead><tr><th>Check</th><th>State</th><th>Detail</th><th>Hint</th><th>Fix Command</th></tr></thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
 </section>

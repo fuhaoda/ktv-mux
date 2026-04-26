@@ -9,9 +9,15 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .alignment import align_lyrics, shift_alignment, shift_alignment_lines, update_alignment_lines
+from .alignment import (
+    align_lyrics,
+    shift_alignment,
+    shift_alignment_lines,
+    stretch_alignment_lines,
+    update_alignment_lines,
+)
 from .ass import build_ass
-from .checkpoints import record_stage_checkpoint
+from .checkpoints import record_stage_checkpoint, stage_checkpoint_completed
 from .errors import PipelineStateError
 from .jsonio import read_json, write_json
 from .library import import_source, load_song, save_lyrics_file
@@ -26,7 +32,7 @@ from .media import (
 )
 from .models import Song, append_stage_status, update_report, utc_now
 from .paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
-from .quality import separation_quality_report
+from .quality import mkv_audit_report, separation_quality_report
 from .versions import record_take
 
 StageFunc = Callable[[], Any]
@@ -221,7 +227,8 @@ class Pipeline:
 
         def stage() -> dict[str, Any]:
             duration = _probe_duration(source)
-            alignment = align_lyrics(audio, lyrics, duration=duration, backend=backend)
+            lrc_path = self.library.original_lyrics_file(clean_id, ".lrc")
+            alignment = align_lyrics(audio, lyrics, duration=duration, backend=backend, lrc_path=lrc_path)
             write_json(self.library.alignment_json(clean_id), alignment)
             ass_text = build_ass(alignment, title=clean_id)
             self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
@@ -302,6 +309,43 @@ class Pipeline:
 
         return self._run_stage(clean_id, "shift-subtitle-lines", stage)
 
+    def stretch_subtitle_lines(
+        self,
+        song_id: str,
+        *,
+        start_line: int,
+        end_line: int,
+        target_start: float,
+        target_end: float,
+    ) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        alignment_path = self._require_file(
+            self.library.alignment_json(clean_id),
+            "Run align before stretching subtitle lines.",
+        )
+
+        def stage() -> dict[str, Any]:
+            alignment = read_json(alignment_path, default={}) or {}
+            stretched = stretch_alignment_lines(
+                alignment,
+                start_index=start_line,
+                end_index=end_line,
+                target_start=target_start,
+                target_end=target_end,
+            )
+            write_json(alignment_path, stretched)
+            ass_text = build_ass(stretched, title=clean_id)
+            self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
+            self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
+            update_report(
+                self.library.report_json(clean_id),
+                subtitle_stretch_range=[start_line, end_line],
+                subtitle_stretch_window=[target_start, target_end],
+            )
+            return stretched
+
+        return self._run_stage(clean_id, "stretch-subtitle-lines", stage)
+
     def edit_subtitles(self, song_id: str, updates: list[dict[str, Any]]) -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
         alignment_path = self._require_file(
@@ -358,10 +402,12 @@ class Pipeline:
                 audio_order=audio_order,
                 cancel_file=cancel_file,
             )
+            output_probe = probe_media(result)
             update_report(
                 self.library.report_json(clean_id),
                 final_mkv=str(result),
                 audio_order=audio_order,
+                final_mkv_audit=mkv_audit_report(output_probe, expected_audio_streams=2, expected_subtitle_streams=1),
                 final_mkv_take=str(_archive_take(self.library, clean_id, result)),
             )
             return result
@@ -396,9 +442,15 @@ class Pipeline:
                 duration_limit=duration_limit,
                 cancel_file=cancel_file,
             )
+            output_probe = probe_media(result)
             update_report(
                 self.library.report_json(clean_id),
                 audio_replaced_mkv=str(result),
+                audio_replaced_mkv_audit=mkv_audit_report(
+                    output_probe,
+                    expected_audio_streams=2,
+                    expected_subtitle_streams=0,
+                ),
                 audio_replaced_mkv_take=str(_archive_take(self.library, clean_id, result)),
                 kept_audio_index=keep_audio_index,
                 kept_audio_track=keep_audio_index + 1,
@@ -481,6 +533,37 @@ class Pipeline:
         final = self.mux(clean_id, cancel_file=cancel_file)
         return {"song_id": clean_id, "final_mkv": str(final)}
 
+    def process_from(
+        self,
+        song_id: str,
+        *,
+        start_stage: str,
+        align_backend: str = "auto",
+        audio_index: int = 0,
+        model: str = "htdemucs",
+        device: str | None = None,
+        duration_limit: float | None = None,
+        cancel_file: Path | None = None,
+    ) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        ordered = ["probe", "extract", "separate", "align", "mux"]
+        if start_stage not in ordered:
+            raise PipelineStateError(f"Unsupported run-from stage: {start_stage}")
+        ran: list[str] = []
+        for stage in ordered[ordered.index(start_stage) :]:
+            if stage == "probe":
+                self.probe(clean_id)
+            elif stage == "extract":
+                self.extract(clean_id, audio_index=audio_index, cancel_file=cancel_file)
+            elif stage == "separate":
+                self.separate(clean_id, model=model, device=device, cancel_file=cancel_file)
+            elif stage == "align":
+                self.align(clean_id, backend=align_backend)
+            elif stage == "mux":
+                self.mux(clean_id, duration_limit=duration_limit, cancel_file=cancel_file)
+            ran.append(stage)
+        return {"song_id": clean_id, "start_stage": start_stage, "ran": ran}
+
     def batch(self, *, raw_root: Path | None = None, align_backend: str = "auto") -> list[dict[str, Any]]:
         root = raw_root or self.library.raw_root
         results: list[dict[str, Any]] = []
@@ -500,8 +583,22 @@ class Pipeline:
         results: list[dict[str, Any]] = []
         if not root.exists():
             return results
+        limit = _optional_int(params.get("limit"))
+        stop_on_error = bool(params.get("stop_on_error", False))
+        skip_completed = bool(params.get("skip_completed", False))
+        dry_run = bool(params.get("dry_run", False))
+        processed = 0
         for song_dir in sorted(path for path in root.iterdir() if path.is_dir()):
             song_id = normalize_song_id(song_dir.name)
+            if limit is not None and processed >= limit:
+                break
+            if skip_completed and _checkpoint_has_outputs(self.library, song_id, stage):
+                results.append({"song_id": song_id, "stage": stage, "skipped": "completed"})
+                continue
+            if dry_run:
+                results.append({"song_id": song_id, "stage": stage, "planned": True})
+                processed += 1
+                continue
             try:
                 if stage == "probe":
                     result = self.probe(song_id)
@@ -525,9 +622,13 @@ class Pipeline:
                 else:
                     raise PipelineStateError(f"Unsupported batch stage: {stage}")
                 results.append({"song_id": song_id, "stage": stage, "result": result})
+                processed += 1
             except Exception as exc:
                 update_report(self.library.report_json(song_id), failure=str(exc), failed_stage=stage)
                 results.append({"song_id": song_id, "stage": stage, "error": str(exc)})
+                processed += 1
+                if stop_on_error:
+                    break
         return results
 
     def _run_stage(self, song_id: str, stage_name: str, func: StageFunc) -> Any:
@@ -625,7 +726,7 @@ def _stage_outputs(library: LibraryPaths, song_id: str, stage: str) -> list[Path
         return sorted(library.previews_dir(song_id).glob("track-*.wav"))
     if stage == "separate":
         return [library.instrumental_wav(song_id), library.vocals_wav(song_id)]
-    if stage in {"align", "shift-subtitles", "shift-subtitle-lines", "edit-subtitles"}:
+    if stage in {"align", "shift-subtitles", "shift-subtitle-lines", "stretch-subtitle-lines", "edit-subtitles"}:
         return [library.alignment_json(song_id), library.lyrics_ass(song_id)]
     if stage == "mux":
         return [library.final_mkv(song_id)]
@@ -634,6 +735,17 @@ def _stage_outputs(library: LibraryPaths, song_id: str, stage: str) -> list[Path
     if stage == "normalize":
         return [library.normalized_instrumental_wav(song_id)]
     return []
+
+
+def _checkpoint_has_outputs(library: LibraryPaths, song_id: str, stage: str) -> bool:
+    return stage_checkpoint_completed(library, song_id, stage)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in {None, ""}:
+        return None
+    parsed = int(value)
+    return parsed if parsed > 0 else None
 
 
 def _import_and_report(
