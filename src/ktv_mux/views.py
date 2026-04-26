@@ -66,7 +66,7 @@ def page(title: str, body: str, *, auto_refresh: bool = False) -> str:
     .fields {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
     .field-wide {{ grid-column: 1 / -1; }}
     .number-input {{ width: 130px; }}
-    .steps {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }}
+    .steps {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }}
     .step {{ border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fbfcfe; display: grid; gap: 10px; align-content: start; }}
     .step strong {{ font-size: 14px; }}
     .flag, .badge {{ display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid #ccd7e5; border-radius: 999px; background: white; color: #2f3c4f; font-size: 12px; font-weight: 620; }}
@@ -82,8 +82,13 @@ def page(title: str, body: str, *, auto_refresh: bool = False) -> str:
     .danger-zone {{ border-color: #f0b4ae; background: #fff8f7; }}
     .metric {{ display: grid; grid-template-columns: minmax(120px, 0.8fr) repeat(4, minmax(70px, 1fr)); gap: 8px; align-items: center; font-size: 13px; border-bottom: 1px solid #e6ebf1; padding: 7px 0; }}
     .metric:first-child {{ color: #344154; font-weight: 700; }}
+    .progress {{ height: 8px; background: #dce5f1; border-radius: 999px; overflow: hidden; min-width: 90px; }}
+    .progress > span {{ display: block; height: 100%; background: var(--accent); }}
+    .mini-form {{ display: inline; }}
+    .track-grid {{ display: grid; grid-template-columns: minmax(90px, 0.7fr) minmax(180px, 1.3fr) minmax(180px, 1fr); gap: 10px; align-items: center; border-bottom: 1px solid #e6ebf1; padding: 10px 0; }}
+    .alignment-row {{ display: grid; grid-template-columns: 72px 90px 90px minmax(180px, 1fr); gap: 8px; align-items: center; }}
     @media (max-width: 920px) {{
-      .grid-2, .grid-3, .steps, .fields, .metric {{ grid-template-columns: 1fr; }}
+      .grid-2, .grid-3, .steps, .fields, .metric, .track-grid, .alignment-row {{ grid-template-columns: 1fr; }}
       .hero {{ align-items: flex-start; flex-direction: column; }}
       main, .topbar {{ padding-left: 14px; padding-right: 14px; }}
       .number-input {{ width: 100%; }}
@@ -91,7 +96,7 @@ def page(title: str, body: str, *, auto_refresh: bool = False) -> str:
   </style>
 </head>
 <body>
-  <header><div class="topbar"><div><div class="brand">ktv-mux</div><div class="subtle">Local KTV MKV workshop</div></div><a class="button secondary" href="/">Songs</a></div></header>
+  <header><div class="topbar"><div><div class="brand">ktv-mux</div><div class="subtle">Local KTV MKV workshop</div></div><div class="row"><a class="button secondary" href="/doctor">Doctor</a><a class="button secondary" href="/">Songs</a></div></div></header>
   <main>{body}</main>
 </body>
 </html>"""
@@ -161,8 +166,10 @@ def render_detail(
     report: dict[str, Any],
     lyrics: str,
     ass: str,
+    alignment: dict[str, Any],
     logs: list[str],
     jobs: list[dict[str, Any]],
+    doctor: dict[str, Any],
 ) -> str:
     state = status.get("state") or "idle"
     state_class = "ok" if state == "completed" else "warn" if state in {"running", "queued"} else "bad" if state == "failed" else ""
@@ -170,7 +177,7 @@ def render_detail(
     selected_index = int((report or {}).get("selected_audio_index") or 0)
     keep_audio_index = int((report or {}).get("kept_audio_index") or 0)
     audio_blocks = render_audio_blocks(song_id, summary)
-    output_blocks = render_outputs(song_id, summary)
+    output_blocks = render_outputs(song_id, summary, report)
     return f"""
 <section class="hero">
   <div>
@@ -194,9 +201,13 @@ def render_detail(
           <select name="audio_index">{render_audio_options(report, selected_index)}</select>
           <button type="submit">Extract</button>
         </form>
+        <form class="step" method="post" action="{song_url(song_id)}/run/preview-tracks">
+          <strong>Preview Tracks</strong>
+          <button type="submit">Build Previews</button>
+        </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/separate">
           <strong>Separate</strong>
-          <button type="submit">Make Instrumental</button>
+          <button type="submit">Make Stem</button>
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/replace-audio">
           <strong>Replace Track 2</strong>
@@ -208,6 +219,10 @@ def render_detail(
       <div class="row" style="margin-top:12px;">
         <form method="post" action="{song_url(song_id)}/run/process"><button class="secondary" type="submit">Run Full Process</button></form>
       </div>
+    </div>
+    <div class="panel">
+      <h2>Source Tracks</h2>
+      {render_track_panel(song_id, report)}
     </div>
     <div class="panel">
       <h2>Audio Preview</h2>
@@ -234,6 +249,7 @@ def render_detail(
           <button class="secondary" type="submit">Build KTV MKV</button>
         </form>
       </div>
+      {render_alignment_editor(song_id, alignment)}
     </div>
   </div>
   <div class="stack">
@@ -248,6 +264,10 @@ def render_detail(
     <div class="panel">
       <h2>Status</h2>
       {render_status(status)}
+    </div>
+    <div class="panel">
+      <h2>Diagnostics</h2>
+      {render_doctor_summary(doctor)}
     </div>
     <div class="panel">
       <h2>Recent Jobs</h2>
@@ -298,7 +318,59 @@ def render_audio_blocks(song_id: str, summary: dict[str, Any]) -> str:
     return "".join(blocks)
 
 
-def render_outputs(song_id: str, summary: dict[str, Any]) -> str:
+def render_track_panel(song_id: str, report: dict[str, Any]) -> str:
+    audio_streams = [s for s in (((report or {}).get("probe") or {}).get("streams") or []) if s.get("codec_type") == "audio"]
+    if not audio_streams:
+        return "<div class='empty'>Run Probe to inspect source audio tracks.</div>"
+    rows = []
+    previews = {int(item.get("audio_index", -1)): item for item in (report.get("track_previews") or [])}
+    for audio_index, stream in enumerate(audio_streams):
+        details = audio_details(stream)
+        preview = previews.get(audio_index)
+        player = (
+            f"<audio controls src='{song_url(song_id)}/audio/track-preview-{audio_index + 1}'></audio>"
+            if preview
+            else "<span class='subtle'>No preview yet.</span>"
+        )
+        rows.append(
+            "<div class='track-grid'>"
+            f"<div><strong>Track {audio_index + 1}</strong></div>"
+            f"<div class='compact'>{escape(details)}</div>"
+            f"<div>{player}</div>"
+            "</div>"
+        )
+    return "<div class='tight'>" + "".join(rows) + "</div>"
+
+
+def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
+    lines = alignment.get("lines") or []
+    if not lines:
+        return ""
+    rows = []
+    for index, item in enumerate(lines[:24]):
+        rows.append(
+            "<div class='alignment-row'>"
+            f"<div class='compact'>Line {index + 1}</div>"
+            f"<input name='line_{index}_start' type='number' step='0.01' value='{fmt_attr(item.get('start'))}'>"
+            f"<input name='line_{index}_end' type='number' step='0.01' value='{fmt_attr(item.get('end'))}'>"
+            f"<input name='line_{index}_text' value='{escape(str(item.get('text') or ''))}'>"
+            "</div>"
+        )
+    note = "<div class='subtle'>Showing first 24 lines.</div>" if len(lines) > 24 else ""
+    return f"""
+      <div class="tight" style="margin-top:14px;">
+        <h3>Subtitle Timing</h3>
+        <form method="post" action="{song_url(song_id)}/alignment" class="tight">
+          <input type="hidden" name="line_count" value="{min(len(lines), 24)}">
+          {''.join(rows)}
+          {note}
+          <div><button class="secondary" type="submit">Save Subtitle Edits</button></div>
+        </form>
+      </div>
+"""
+
+
+def render_outputs(song_id: str, summary: dict[str, Any], report: dict[str, Any]) -> str:
     rows = []
     if summary.get("has_instrumental"):
         rows.append(output_row("Instrumental WAV", f"{song_url(song_id)}/download/instrumental", "instrumental.wav"))
@@ -306,8 +378,16 @@ def render_outputs(song_id: str, summary: dict[str, Any]) -> str:
         rows.append(output_row("Audio-Replaced MKV", f"{song_url(song_id)}/download/audio-replaced-mkv", "new instrumental as Track 2"))
     if summary.get("has_mkv"):
         rows.append(output_row("KTV MKV", f"{song_url(song_id)}/download/ktv-mkv", "dual audio + ASS"))
+    for take in summary.get("take_files") or []:
+        rows.append(output_row("Saved Take", f"{song_url(song_id)}/download/take/{quote(str(take), safe='')}", str(take)))
     if not rows:
         return "<div class='empty'>No outputs yet.</div>"
+    latest = []
+    for key in ["instrumental_take", "audio_replaced_mkv_take", "final_mkv_take"]:
+        if report.get(key):
+            latest.append(f"<div class='path'>{escape(str(report[key]))}</div>")
+    if latest:
+        rows.append("<div><strong>Latest versioned copies</strong>" + "".join(latest) + "</div>")
     return "<div class='stack'>" + "".join(rows) + "</div>"
 
 
@@ -320,7 +400,7 @@ def render_quality(report: dict[str, Any]) -> str:
     if not isinstance(quality, dict):
         return "<div class='empty'>No quality metrics yet.</div>"
     rows = [
-        "<div class='metric'><div>Stem</div><div>Duration</div><div>RMS dBFS</div><div>Peak dBFS</div><div>Rate</div></div>"
+        "<div class='metric'><div>Stem</div><div>Duration</div><div>RMS dBFS</div><div>Peak dBFS</div><div>Clip</div></div>"
     ]
     for key, label in [("mix", "Mix"), ("instrumental", "Instrumental"), ("vocals", "Vocals")]:
         metric = quality.get(key) or {}
@@ -330,12 +410,13 @@ def render_quality(report: dict[str, Any]) -> str:
             f"<div>{fmt(metric.get('duration'))}</div>"
             f"<div>{fmt(metric.get('rms_dbfs'))}</div>"
             f"<div>{fmt(metric.get('peak_dbfs'))}</div>"
-            f"<div>{fmt(metric.get('sample_rate'))}</div>"
+            f"<div>{fmt_percent(metric.get('clipped_ratio'))}</div>"
             "</div>"
         )
     rows.append(
         f"<div class='subtle'>Instrumental RMS delta: {fmt(quality.get('instrumental_rms_delta_db'))}; "
-        f"vocals RMS delta: {fmt(quality.get('vocals_rms_delta_db'))}</div>"
+        f"vocals RMS delta: {fmt(quality.get('vocals_rms_delta_db'))}; "
+        f"instrumental silence: {fmt_percent((quality.get('instrumental') or {}).get('silence_ratio'))}</div>"
     )
     return "<div class='tight'>" + "".join(rows) + "</div>"
 
@@ -362,14 +443,28 @@ def render_jobs(jobs: list[dict[str, Any]]) -> str:
     for job in jobs:
         state = str(job.get("state") or "")
         state_class = "ok" if state == "completed" else "warn" if state in {"running", "queued"} else "bad" if state == "failed" else ""
+        progress = int(job.get("progress") or 0)
+        actions = render_job_actions(job)
         rows.append(
             f"<tr><td>{escape(str(job.get('created_at') or ''))}</td>"
             f"<td><a href='{song_url(str(job.get('song_id') or ''))}'>{escape(str(job.get('song_id') or ''))}</a></td>"
             f"<td>{escape(str(job.get('stage') or ''))}</td>"
             f"<td><span class='badge {state_class}'>{escape(state)}</span></td>"
-            f"<td class='compact'>{escape(trim(str(job.get('message') or ''), 160))}</td></tr>"
+            f"<td><div class='progress'><span style='width:{progress}%'></span></div><div class='compact'>{progress}%</div></td>"
+            f"<td class='compact'>{escape(trim(str(job.get('message') or ''), 160))}</td>"
+            f"<td>{actions}</td></tr>"
         )
-    return f"<table><thead><tr><th>Created</th><th>Song</th><th>Stage</th><th>State</th><th>Message</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return f"<table><thead><tr><th>Created</th><th>Song</th><th>Stage</th><th>State</th><th>Progress</th><th>Message</th><th>Actions</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+
+def render_job_actions(job: dict[str, Any]) -> str:
+    job_id = escape(str(job.get("job_id") or ""))
+    state = str(job.get("state") or "")
+    if state == "queued":
+        return f"<form class='mini-form' method='post' action='/jobs/{job_id}/cancel'><button class='secondary' type='submit'>Cancel</button></form>"
+    if state in {"failed", "canceled"}:
+        return f"<form class='mini-form' method='post' action='/jobs/{job_id}/retry'><button class='secondary' type='submit'>Retry</button></form>"
+    return ""
 
 
 def render_logs(song_id: str, logs: list[str]) -> str:
@@ -380,6 +475,51 @@ def render_logs(song_id: str, logs: list[str]) -> str:
         for stage in logs
     )
     return f"<div class='row'>{links}</div>"
+
+
+def render_doctor_summary(doctor: dict[str, Any]) -> str:
+    checks = doctor.get("checks") or []
+    failed = [check for check in checks if not check.get("ok") and check.get("required")]
+    optional = [check for check in checks if not check.get("ok") and not check.get("required")]
+    badge = "ok" if not failed else "bad"
+    body = f"<span class='badge {badge}'>{'ready' if not failed else 'attention needed'}</span>"
+    if failed:
+        body += "<div class='compact'>" + "; ".join(escape(str(item.get("name"))) for item in failed) + "</div>"
+    if optional:
+        body += "<div class='subtle'>Optional missing: " + ", ".join(escape(str(item.get("name"))) for item in optional) + "</div>"
+    hint = ((doctor.get("song") or {}).get("next_hint") or "").strip()
+    if hint:
+        body += f"<div class='subtle'>{escape(hint)}</div>"
+    body += "<div style='margin-top:8px;'><a class='button secondary' href='/doctor'>Open Doctor</a></div>"
+    return body
+
+
+def render_doctor(doctor: dict[str, Any]) -> str:
+    rows = []
+    for check in doctor.get("checks") or []:
+        state = "ok" if check.get("ok") else "warn" if not check.get("required") else "bad"
+        rows.append(
+            f"<tr><td>{escape(str(check.get('name') or ''))}</td>"
+            f"<td><span class='badge {state}'>{'ok' if check.get('ok') else 'missing'}</span></td>"
+            f"<td>{escape(str(check.get('detail') or ''))}</td>"
+            f"<td class='compact'>{escape(str(check.get('hint') or ''))}</td></tr>"
+        )
+    return f"""
+<section class="hero">
+  <div><h1>Doctor</h1><div class="subtle">Dependency and library checks for the local KTV workflow.</div></div>
+  <span class="badge {'ok' if doctor.get('ok') else 'bad'}">{'ready' if doctor.get('ok') else 'attention needed'}</span>
+</section>
+<section class="panel">
+  <table>
+    <thead><tr><th>Check</th><th>State</th><th>Detail</th><th>Hint</th></tr></thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</section>
+<section class="panel" style="margin-top:16px;">
+  <h2>Library</h2>
+  <pre>{escape(json_dump(doctor.get('library') or {}))}</pre>
+</section>
+"""
 
 
 def render_audio_options(report: dict[str, Any], selected_index: int) -> str:
@@ -393,16 +533,23 @@ def render_audio_options(report: dict[str, Any], selected_index: int) -> str:
     options = []
     for audio_index, stream in enumerate(audio_streams):
         selected = " selected" if audio_index == selected_index else ""
-        codec = stream.get("codec_name") or "audio"
-        channels = stream.get("channels")
-        sample_rate = stream.get("sample_rate")
-        default = " default" if (stream.get("disposition") or {}).get("default") else ""
-        details = " ".join(str(x) for x in [codec, sample_rate, f"{channels}ch" if channels else "", default] if x)
+        details = audio_details(stream)
         label = f"Track {audio_index + 1}"
         if details:
             label = f"{label} - {details}"
         options.append(f"<option value='{audio_index}'{selected}>{escape(label)}</option>")
     return "".join(options)
+
+
+def audio_details(stream: dict[str, Any]) -> str:
+    codec = stream.get("codec_name") or "audio"
+    channels = stream.get("channels")
+    sample_rate = stream.get("sample_rate")
+    language = (stream.get("tags") or {}).get("language")
+    title = (stream.get("tags") or {}).get("title")
+    default = "default" if (stream.get("disposition") or {}).get("default") else ""
+    values = [codec, sample_rate, f"{channels}ch" if channels else "", language, title, default]
+    return " ".join(str(item) for item in values if item)
 
 
 def render_flags(song: dict[str, Any]) -> str:
@@ -477,6 +624,24 @@ def fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.2f}"
     return escape(str(value))
+
+
+def fmt_attr(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return escape(str(value))
+
+
+def fmt_percent(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value) * 100:.2f}%"
+    except (TypeError, ValueError):
+        return escape(str(value))
 
 
 def json_dump(value: Any) -> str:

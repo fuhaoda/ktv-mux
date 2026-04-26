@@ -10,6 +10,9 @@ class FakePipeline:
     def extract(self, song_id, *, audio_index=0):
         self.calls.append(("extract", song_id, audio_index))
 
+    def preview_tracks(self, song_id, *, duration=20.0):
+        self.calls.append(("preview-tracks", song_id, duration))
+
     def shift_subtitles(self, song_id, *, seconds=0.0):
         self.calls.append(("shift-subtitles", song_id, seconds))
 
@@ -28,13 +31,35 @@ def test_job_runner_submit_persists_queue_state(tmp_path):
     assert runner.list_jobs()[0].job_id == job.job_id
 
 
+def test_job_runner_cancel_and_retry(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+    runner = LocalJobRunner(library, FakePipeline())
+    job = runner.submit("song", "extract", {"audio_index": 1})
+
+    assert runner.cancel(job.job_id) is True
+    canceled = read_json(library.job_json(job.job_id))
+    assert canceled["state"] == "canceled"
+
+    retry = runner.retry(job.job_id)
+    assert retry is not None
+    assert retry.params["retry_of"] == job.job_id
+
+
 def test_run_pipeline_stage_passes_stage_parameters():
     pipeline = FakePipeline()
 
     run_pipeline_stage(pipeline, Job(job_id="1", song_id="song", stage="extract", params={"audio_index": 2}))
     run_pipeline_stage(
         pipeline,
+        Job(job_id="preview", song_id="song", stage="preview-tracks", params={"duration": "7.5"}),
+    )
+    run_pipeline_stage(
+        pipeline,
         Job(job_id="2", song_id="song", stage="shift-subtitles", params={"seconds": "-0.25"}),
     )
 
-    assert pipeline.calls == [("extract", "song", 2), ("shift-subtitles", "song", -0.25)]
+    assert pipeline.calls == [
+        ("extract", "song", 2),
+        ("preview-tracks", "song", 7.5),
+        ("shift-subtitles", "song", -0.25),
+    ]

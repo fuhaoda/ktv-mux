@@ -16,6 +16,7 @@ Open `http://127.0.0.1:8000`.
 ```bash
 .venv/bin/ktv import assets/朋友-周华健.mkv
 .venv/bin/ktv probe 朋友-周华健
+.venv/bin/ktv preview-tracks 朋友-周华健
 .venv/bin/ktv extract 朋友-周华健 --audio-index 0
 .venv/bin/ktv separate 朋友-周华健
 ```
@@ -36,6 +37,8 @@ The CLI uses zero-based indexes:
 ktv extract 朋友-周华健 --audio-index 0  # Web Track 1
 ktv extract 朋友-周华健 --audio-index 1  # Web Track 2
 ```
+
+Before extracting, use `preview-tracks` or the Web `Preview Tracks` button to create short playable clips for every source audio track.
 
 ## Replace Track 2 With A Generated Instrumental
 
@@ -61,10 +64,12 @@ After `separate`, the app writes:
 library/output/朋友-周华健/instrumental.wav
 library/work/朋友-周华健/vocals.wav
 library/work/朋友-周华健/logs/separate.log
+library/work/朋友-周华健/track-previews/track-1.wav
 library/output/朋友-周华健/report.json
+library/output/朋友-周华健/takes/
 ```
 
-The Web detail page shows playable audio, recent job state, the Demucs log link, and basic WAV level metrics.
+The Web detail page shows playable audio, recent job state, the Demucs log link, track previews, versioned takes, and WAV level metrics including clipping and silence ratio.
 
 ## Full KTV MKV With Lyrics
 
@@ -74,6 +79,7 @@ Add lyrics:
 ktv lyrics 朋友-周华健 path/to/lyrics.txt
 ktv align 朋友-周华健 --backend simple
 ktv shift 朋友-周华健 --seconds 0.25
+ktv edit-line 朋友-周华健 --index 0 --start 8.5 --end 11.2 --text "朋友一生一起走"
 ktv mux 朋友-周华健
 ```
 
@@ -84,7 +90,30 @@ The `simple` backend creates draft timings without downloading alignment models.
 ktv align 朋友-周华健 --backend funasr
 ```
 
-Use a positive shift when subtitles appear too early; use a negative shift when they appear too late.
+Use a positive shift when subtitles appear too early; use a negative shift when they appear too late. The Web detail page also exposes a line-level timing editor after `align` creates `alignment.json`.
+
+LRC timestamps and simple chord tags are cleaned when lyrics are saved:
+
+```text
+[00:01.00][C]  第一  句　歌词
+```
+
+becomes:
+
+```text
+第一 句 歌词
+```
+
+## Jobs And Diagnostics
+
+The Web UI has a local job drawer with progress bars, queued-job cancel, and failed-job retry. Demucs progress is estimated from `separate.log`.
+
+Run local diagnostics:
+
+```bash
+ktv doctor
+ktv doctor 朋友-周华健
+```
 
 ## Cleanup
 

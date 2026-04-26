@@ -1,7 +1,7 @@
-from ktv_mux.alignment import generate_even_alignment, shift_alignment
+from ktv_mux.alignment import generate_even_alignment, shift_alignment, update_alignment_lines
 from ktv_mux.ass import ass_karaoke_text, build_ass, seconds_to_ass_time
-from ktv_mux.lyrics import parse_lyrics_text, split_tokens
-from ktv_mux.paths import derive_song_id_from_source, normalize_song_id
+from ktv_mux.lyrics import normalize_lyrics_text, parse_lrc_text, parse_lyrics_text, split_tokens
+from ktv_mux.paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
 
 
 def test_normalize_song_id_keeps_chinese_and_removes_separators():
@@ -13,8 +13,21 @@ def test_derive_song_id_from_local_filename():
     assert derive_song_id_from_source("assets/朋友-周华健.mkv") == "朋友-周华健"
 
 
+def test_library_paths_include_previews_and_takes(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+    library.ensure_song_dirs("song")
+    assert library.track_preview_wav("song", 1).name == "track-2.wav"
+    assert library.takes_dir("song").exists()
+
+
 def test_parse_lyrics_text_ignores_blank_lines():
     assert parse_lyrics_text("第一句\n\n  第二句  \n") == ["第一句", "第二句"]
+
+
+def test_lyrics_cleanup_handles_lrc_timestamps_and_chords():
+    text = "[00:01.00][C]  第一  句　歌词\n[00:02.00]第二句"
+    assert parse_lrc_text(text) == ["第一 句 歌词", "第二句"]
+    assert normalize_lyrics_text(text) == "第一 句 歌词\n第二句"
 
 
 def test_split_tokens_uses_chars_for_chinese_and_words_for_spaced_text():
@@ -48,3 +61,15 @@ def test_shift_alignment_moves_lines_and_tokens():
     assert shifted["manual_offset_seconds"] == 0.5
     assert shifted["lines"][0]["start"] == alignment["lines"][0]["start"] + 0.5
     assert shifted["lines"][0]["tokens"][0]["start"] == alignment["lines"][0]["tokens"][0]["start"] + 0.5
+
+
+def test_update_alignment_lines_retimes_tokens():
+    alignment = generate_even_alignment(["朋友"], duration=4)
+    edited = update_alignment_lines(alignment, [{"index": 0, "start": 1.0, "end": 2.0, "text": "新朋友"}])
+
+    assert edited["manual_edits"] is True
+    assert edited["lines"][0]["start"] == 1.0
+    assert edited["lines"][0]["end"] == 2.0
+    assert edited["lines"][0]["text"] == "新朋友"
+    assert edited["lines"][0]["tokens"][0]["start"] == 1.0
+    assert edited["lines"][0]["tokens"][-1]["end"] == 2.0

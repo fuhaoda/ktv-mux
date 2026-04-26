@@ -10,6 +10,7 @@ from .jsonio import read_json, write_json
 from .models import append_stage_status, utc_now
 from .paths import LibraryPaths, normalize_song_id
 from .pipeline import Pipeline
+from .progress import estimate_stage_progress
 
 
 @dataclass
@@ -22,6 +23,8 @@ class Job:
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     message: str = ""
+    progress: int = 0
+    attempts: int = 0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Job:
@@ -37,6 +40,8 @@ class Job:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "message": self.message,
+            "progress": self.progress,
+            "attempts": self.attempts,
         }
 
 
@@ -70,6 +75,27 @@ class LocalJobRunner:
         self._queue.put(job.job_id)
         return job
 
+    def cancel(self, job_id: str) -> bool:
+        job = self._load(job_id)
+        if job is None:
+            return False
+        if job.state != "queued":
+            job.message = "Only queued jobs can be canceled."
+            self._save(job)
+            return False
+        job.state = "canceled"
+        job.message = "canceled before start"
+        job.progress = 0
+        self._save(job)
+        append_stage_status(self.library.status_json(job.song_id), job.stage, "canceled", f"job {job.job_id}")
+        return True
+
+    def retry(self, job_id: str) -> Job | None:
+        job = self._load(job_id)
+        if job is None or job.state not in {"failed", "canceled"}:
+            return None
+        return self.submit(job.song_id, job.stage, {**job.params, "retry_of": job.job_id})
+
     def list_jobs(self, *, limit: int = 25) -> list[Job]:
         if not self.library.jobs_root.exists():
             return []
@@ -77,7 +103,7 @@ class LocalJobRunner:
         for path in self.library.jobs_root.glob("*.json"):
             data = read_json(path, default=None)
             if isinstance(data, dict):
-                jobs.append(Job.from_dict(data))
+                jobs.append(self._with_progress(Job.from_dict(data)))
         jobs.sort(key=lambda job: job.created_at, reverse=True)
         return jobs[:limit]
 
@@ -99,12 +125,18 @@ class LocalJobRunner:
             job.updated_at = utc_now()
             write_json(self.library.job_json(job.job_id), job.to_dict())
 
+    def _with_progress(self, job: Job) -> Job:
+        job.progress = estimate_stage_progress(self.library, job.song_id, job.stage, job.state)
+        return job
+
     def _worker(self) -> None:
         while True:
             job_id = self._queue.get()
             try:
                 job = self._load(job_id)
                 if job is None:
+                    continue
+                if job.state == "canceled":
                     continue
                 self._run(job)
             finally:
@@ -113,6 +145,8 @@ class LocalJobRunner:
     def _run(self, job: Job) -> None:
         job.state = "running"
         job.message = ""
+        job.attempts += 1
+        job.progress = 5
         self._save(job)
         try:
             run_pipeline_stage(self.pipeline, job)
@@ -124,6 +158,7 @@ class LocalJobRunner:
             return
         job.state = "completed"
         job.message = "completed"
+        job.progress = 100
         self._save(job)
 
 
@@ -133,12 +168,16 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job) -> None:
         pipeline.probe(job.song_id)
     elif job.stage == "extract":
         pipeline.extract(job.song_id, audio_index=int(params.get("audio_index", 0)))
+    elif job.stage == "preview-tracks":
+        pipeline.preview_tracks(job.song_id, duration=float(params.get("duration", 20.0)))
     elif job.stage == "separate":
         pipeline.separate(job.song_id)
     elif job.stage == "align":
         pipeline.align(job.song_id)
     elif job.stage == "shift-subtitles":
         pipeline.shift_subtitles(job.song_id, seconds=float(params.get("seconds", 0.0)))
+    elif job.stage == "edit-subtitles":
+        pipeline.edit_subtitles(job.song_id, list(params.get("updates") or []))
     elif job.stage == "mux":
         pipeline.mux(job.song_id, audio_order=str(params.get("audio_order", "instrumental-first")))
     elif job.stage == "replace-audio":

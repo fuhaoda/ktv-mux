@@ -23,6 +23,18 @@ def test_analyze_wav_reports_duration_and_levels(tmp_path):
     assert info["duration"] == 0.1
     assert info["sample_rate"] == 8000
     assert info["rms_dbfs"] is not None
+    assert info["clipped_ratio"] == 0
+    assert info["silence_ratio"] == 0
+
+
+def test_analyze_wav_detects_clipping_and_silence(tmp_path):
+    clipped = tmp_path / "clipped.wav"
+    silent = tmp_path / "silent.wav"
+    write_wav(clipped, 32767)
+    write_wav(silent, 0)
+
+    assert analyze_wav(clipped)["clipped_ratio"] > 0
+    assert analyze_wav(silent)["silence_ratio"] == 1.0
 
 
 def test_separation_quality_report_compares_stems(tmp_path):

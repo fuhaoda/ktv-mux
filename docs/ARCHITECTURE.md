@@ -10,6 +10,8 @@
 - `alignment.py`: lyrics alignment abstraction; FunASR when installed, deterministic draft fallback otherwise.
 - `ass.py`: ASS karaoke subtitle generation.
 - `quality.py`: lightweight WAV duration and level metrics for separation review.
+- `progress.py`: stage progress estimation, especially Demucs log parsing.
+- `diagnostics.py`: local dependency and per-song failure diagnosis.
 - `pipeline.py`: stage orchestration and status/report writing.
 - `jobs.py`: file-backed local queue for long-running Web tasks.
 - `cli.py`: `ktv` command line interface.
@@ -30,6 +32,7 @@ library/
     alignment.json
     status.json
     logs/
+    track-previews/
     demucs/
   output/{song_id}/
     instrumental.wav
@@ -37,6 +40,7 @@ library/
     {song_id}.audio-replaced.mkv
     {song_id}.ktv.mkv
     report.json
+    takes/
   jobs/
     {job_id}.json
 ```
@@ -46,15 +50,19 @@ library/
 1. `import`: copy a local file or download a URL into `raw/{song_id}`.
 2. `probe`: record source media streams with FFprobe.
 3. `extract`: extract a selected audio stream into `work/{song_id}/mix.wav`.
-4. `separate`: run Demucs and write `instrumental.wav` plus `vocals.wav`.
-5. `replace-audio`: create an MKV with original Track 1 and generated instrumental as Track 2.
-6. `align`: turn `lyrics.txt` into `alignment.json` and `lyrics.ass`.
-7. `shift-subtitles`: apply a manual timing offset and rebuild `lyrics.ass`.
-8. `mux`: create the final KTV MKV with generated ASS lyrics.
-9. `clean-work`: remove regenerable intermediate files while keeping source and outputs.
+4. `preview-tracks`: extract short clips from every source audio stream.
+5. `separate`: run Demucs and write `instrumental.wav` plus `vocals.wav`.
+6. `replace-audio`: create an MKV with original Track 1 and generated instrumental as Track 2.
+7. `align`: turn `lyrics.txt` into `alignment.json` and `lyrics.ass`.
+8. `shift-subtitles`: apply a manual timing offset and rebuild `lyrics.ass`.
+9. `edit-subtitles`: update line-level timing/text and rebuild `lyrics.ass`.
+10. `mux`: create the final KTV MKV with generated ASS lyrics.
+11. `clean-work`: remove regenerable intermediate files while keeping source and outputs.
 
 ## Web Behavior
 
-Long-running stage buttons enqueue a file-backed local job and immediately return to the song page. On app startup, jobs left in `queued` or `running` state are recovered and queued again.
+Long-running stage buttons enqueue a file-backed local job and immediately return to the song page. On app startup, jobs left in `queued` or `running` state are recovered and queued again. Queued jobs can be canceled, failed/canceled jobs can be retried, and running Demucs progress is estimated from the stage log.
 
 Each pipeline stage takes a per-song file lock, so a user can click multiple actions without corrupting one song's working files. Failures are written to `status.json` and `report.json`; ordinary request failures render a friendly error page rather than a raw Internal Server Error.
+
+Outputs keep a stable "latest" file for normal use and a timestamped copy under `takes/` for comparison across models, source tracks, and subtitle edits.

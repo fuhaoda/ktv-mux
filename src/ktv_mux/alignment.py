@@ -198,6 +198,30 @@ def shift_alignment(alignment: dict[str, Any], offset_seconds: float) -> dict[st
     return shifted
 
 
+def update_alignment_lines(alignment: dict[str, Any], updates: list[dict[str, Any]]) -> dict[str, Any]:
+    edited = copy.deepcopy(alignment)
+    lines = edited.get("lines") or []
+    for update in updates:
+        try:
+            index = int(update["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if index < 0 or index >= len(lines) or not isinstance(lines[index], dict):
+            continue
+        line = lines[index]
+        start = _coerce_time(update.get("start"), line.get("start", 0.0))
+        end = _coerce_time(update.get("end"), line.get("end", start + 0.5))
+        text = str(update.get("text") or line.get("text") or "").strip()
+        if end <= start:
+            end = start + 0.01
+        line["start"] = round(start, 3)
+        line["end"] = round(end, 3)
+        line["text"] = text
+        line["tokens"] = _tokens_between(text, start=line["start"], end=line["end"])
+    edited["manual_edits"] = True
+    return edited
+
+
 def _shift_timed_item(item: dict[str, Any], offset: float) -> None:
     start = _shift_time(item.get("start"), offset)
     end = _shift_time(item.get("end"), offset)
@@ -213,3 +237,29 @@ def _shift_time(value: Any, offset: float) -> float:
     except (TypeError, ValueError):
         seconds = 0.0
     return round(max(0.0, seconds + offset), 3)
+
+
+def _coerce_time(value: Any, fallback: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            return max(0.0, float(fallback))
+        except (TypeError, ValueError):
+            return 0.0
+
+
+def _tokens_between(text: str, *, start: float, end: float) -> list[dict[str, Any]]:
+    tokens = split_tokens(text)
+    if not tokens:
+        return []
+    duration = max(0.01, end - start)
+    step = duration / len(tokens)
+    result: list[dict[str, Any]] = []
+    cursor = start
+    for token in tokens:
+        token_end = cursor + step
+        result.append({"text": token, "start": round(cursor, 3), "end": round(token_end, 3)})
+        cursor = token_end
+    result[-1]["end"] = round(end, 3)
+    return result

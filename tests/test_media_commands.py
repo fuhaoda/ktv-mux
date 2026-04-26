@@ -2,7 +2,13 @@ import json
 from pathlib import Path
 
 from ktv_mux.library import build_ytdlp_cmd
-from ktv_mux.media import build_extract_mix_cmd, build_mux_cmd, build_replace_audio_track_cmd, parse_probe_json
+from ktv_mux.media import (
+    build_extract_mix_cmd,
+    build_extract_preview_cmd,
+    build_mux_cmd,
+    build_replace_audio_track_cmd,
+    parse_probe_json,
+)
 
 
 def test_parse_probe_json_counts_stream_types():
@@ -33,6 +39,13 @@ def test_build_extract_mix_cmd_maps_first_audio():
 def test_build_extract_mix_cmd_can_select_second_audio():
     cmd = build_extract_mix_cmd(Path("source.mkv"), Path("mix.wav"), audio_index=1)
     assert "0:a:1" in cmd
+
+
+def test_build_extract_preview_cmd_limits_duration():
+    cmd = build_extract_preview_cmd(Path("source.mkv"), Path("preview.wav"), audio_index=1, duration=12.5)
+    assert "0:a:1" in cmd
+    assert "-t" in cmd
+    assert "12.500" in cmd
 
 
 def test_build_mux_cmd_has_dual_audio_metadata_and_default_instrumental():

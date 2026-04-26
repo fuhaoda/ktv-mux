@@ -68,6 +68,9 @@ class LibraryPaths:
     def output_dir(self, song_id: str) -> Path:
         return self.output_root / normalize_song_id(song_id)
 
+    def takes_dir(self, song_id: str) -> Path:
+        return self.output_dir(song_id) / "takes"
+
     def song_json(self, song_id: str) -> Path:
         return self.raw_dir(song_id) / "song.json"
 
@@ -94,6 +97,12 @@ class LibraryPaths:
 
     def vocals_wav(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "vocals.wav"
+
+    def previews_dir(self, song_id: str) -> Path:
+        return self.work_dir(song_id) / "track-previews"
+
+    def track_preview_wav(self, song_id: str, audio_index: int) -> Path:
+        return self.previews_dir(song_id) / f"track-{audio_index + 1}.wav"
 
     def instrumental_wav(self, song_id: str) -> Path:
         return self.output_dir(song_id) / "instrumental.wav"
@@ -132,6 +141,8 @@ class LibraryPaths:
         self.work_dir(song_id).mkdir(parents=True, exist_ok=True)
         self.output_dir(song_id).mkdir(parents=True, exist_ok=True)
         (self.work_dir(song_id) / "logs").mkdir(parents=True, exist_ok=True)
+        self.takes_dir(song_id).mkdir(parents=True, exist_ok=True)
+        self.previews_dir(song_id).mkdir(parents=True, exist_ok=True)
 
     def list_song_ids(self) -> list[str]:
         if not self.raw_root.exists():

@@ -16,6 +16,8 @@ def analyze_wav(path: Path) -> dict[str, Any]:
         frames = wav.getnframes()
         raw = wav.readframes(frames)
     peak, rms = _peak_and_rms(raw, sample_width)
+    clipping = _clipping_stats(raw, sample_width)
+    silence = _silence_ratio(raw, sample_width, threshold_ratio=0.001)
     full_scale = float((1 << (8 * sample_width - 1)) - 1)
     return {
         "path": str(path),
@@ -26,6 +28,9 @@ def analyze_wav(path: Path) -> dict[str, Any]:
         "sample_width": sample_width,
         "peak_dbfs": _dbfs(peak, full_scale),
         "rms_dbfs": _dbfs(rms, full_scale),
+        "clipped_samples": clipping["clipped_samples"],
+        "clipped_ratio": clipping["clipped_ratio"],
+        "silence_ratio": silence,
         "size_bytes": path.stat().st_size,
     }
 
@@ -75,6 +80,38 @@ def _peak_and_rms(raw: bytes, sample_width: int) -> tuple[int, int]:
         peak = max(peak, absolute)
         total_square += absolute * absolute
     return peak, int(math.sqrt(total_square / count))
+
+
+def _clipping_stats(raw: bytes, sample_width: int) -> dict[str, Any]:
+    if not raw or sample_width <= 0:
+        return {"clipped_samples": 0, "clipped_ratio": 0.0}
+    count = len(raw) // sample_width
+    if count == 0:
+        return {"clipped_samples": 0, "clipped_ratio": 0.0}
+    max_positive = (1 << (8 * sample_width - 1)) - 1
+    max_negative = -(1 << (8 * sample_width - 1))
+    clipped = 0
+    for index in range(0, count * sample_width, sample_width):
+        sample = _pcm_sample(raw[index : index + sample_width], sample_width)
+        if sample >= max_positive or sample <= max_negative:
+            clipped += 1
+    return {"clipped_samples": clipped, "clipped_ratio": round(clipped / count, 6)}
+
+
+def _silence_ratio(raw: bytes, sample_width: int, *, threshold_ratio: float) -> float:
+    if not raw or sample_width <= 0:
+        return 0.0
+    count = len(raw) // sample_width
+    if count == 0:
+        return 0.0
+    full_scale = float((1 << (8 * sample_width - 1)) - 1)
+    threshold = full_scale * threshold_ratio
+    silent = 0
+    for index in range(0, count * sample_width, sample_width):
+        sample = _pcm_sample(raw[index : index + sample_width], sample_width)
+        if abs(sample) <= threshold:
+            silent += 1
+    return round(silent / count, 6)
 
 
 def _pcm_sample(chunk: bytes, sample_width: int) -> int:

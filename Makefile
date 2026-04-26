@@ -27,7 +27,9 @@ serve:
 smoke:
 	$(KTV) import assets/朋友-周华健.mkv
 	$(KTV) probe 朋友-周华健
+	$(KTV) preview-tracks 朋友-周华健 --duration 5
 	$(KTV) extract 朋友-周华健 --audio-index 0
+	$(KTV) doctor 朋友-周华健
 
 clean:
 	rm -rf .pytest_cache .ruff_cache src/ktv_mux.egg-info

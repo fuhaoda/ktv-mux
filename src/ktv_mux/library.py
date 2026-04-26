@@ -7,6 +7,7 @@ from typing import Any
 from .commands import require_command, run_command
 from .errors import KtvError
 from .jsonio import read_json
+from .lyrics import normalize_lyrics_text
 from .models import Song
 from .paths import LibraryPaths, derive_song_id_from_source, is_url, normalize_song_id
 
@@ -91,11 +92,12 @@ def load_song(library: LibraryPaths, song_id: str) -> Song:
     return Song.from_json(library.song_json(song_id))
 
 
-def save_lyrics_text(library: LibraryPaths, song_id: str, lyrics_text: str) -> Path:
+def save_lyrics_text(library: LibraryPaths, song_id: str, lyrics_text: str, *, clean: bool = True) -> Path:
     clean_id = normalize_song_id(song_id)
     library.ensure_song_dirs(clean_id)
     path = library.lyrics_txt(clean_id)
-    path.write_text(lyrics_text.rstrip() + "\n", encoding="utf-8")
+    text = normalize_lyrics_text(lyrics_text) if clean else lyrics_text.rstrip()
+    path.write_text(text + "\n", encoding="utf-8")
 
     try:
         song = load_song(library, clean_id)
@@ -139,4 +141,8 @@ def song_summary(library: LibraryPaths, song_id: str) -> dict[str, Any]:
     summary["has_ass"] = library.lyrics_ass(song_id).exists()
     summary["has_mkv"] = library.final_mkv(song_id).exists()
     summary["has_audio_replaced_mkv"] = library.audio_replaced_mkv(song_id).exists()
+    summary["take_files"] = [path.name for path in sorted(library.takes_dir(song_id).glob("*")) if path.is_file()]
+    summary["track_previews"] = [
+        path.name for path in sorted(library.previews_dir(song_id).glob("track-*.wav")) if path.is_file()
+    ]
     return summary

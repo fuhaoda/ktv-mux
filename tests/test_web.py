@@ -11,6 +11,7 @@ def test_index_makes_song_id_optional(tmp_path):
     assert "Song ID optional" in response.text
     assert "Choose File" in response.text
     assert "Recent Jobs" in response.text
+    assert "Doctor" in response.text
 
 
 def test_upload_defaults_song_id_to_filename(tmp_path):
@@ -37,5 +38,14 @@ def test_detail_exposes_separate_steps_and_management(tmp_path):
 
     assert response.status_code == 200
     assert "Shift ASS" in response.text
+    assert "Preview Tracks" in response.text
+    assert "Diagnostics" in response.text
     assert "Clean Regenerable Work Files" in response.text
     assert "Delete Song" in response.text
+
+
+def test_doctor_page_renders(tmp_path):
+    client = TestClient(create_app(LibraryPaths(tmp_path / "library")))
+    response = client.get("/doctor")
+    assert response.status_code == 200
+    assert "Dependency and library checks" in response.text

@@ -1,13 +1,14 @@
 import traceback
 from pathlib import Path
 
+from .diagnostics import run_doctor
 from .errors import KtvError
 from .jobs import LocalJobRunner
 from .jsonio import read_json
 from .library import delete_song, record_imported_source, save_lyrics_text, song_summary
 from .paths import LibraryPaths, normalize_song_id
 from .pipeline import Pipeline
-from .views import page, render_delete_confirm, render_detail, render_error, render_index, song_url
+from .views import page, render_delete_confirm, render_detail, render_doctor, render_error, render_index, song_url
 
 
 def create_app(library: LibraryPaths | None = None):
@@ -34,6 +35,10 @@ def create_app(library: LibraryPaths | None = None):
         jobs = [job.to_dict() for job in runner.list_jobs(limit=8)]
         auto_refresh = any(job.get("state") in {"queued", "running"} for job in jobs)
         return page("Songs", render_index(songs, jobs), auto_refresh=auto_refresh)
+
+    @app.get("/doctor", response_class=HTMLResponse)
+    def doctor() -> str:
+        return page("Doctor", render_doctor(run_doctor(library)))
 
     @app.post("/import")
     def import_route(
@@ -82,11 +87,23 @@ def create_app(library: LibraryPaths | None = None):
         report = read_json(library.report_json(clean_id), default={}) or {}
         lyrics = library.lyrics_txt(clean_id).read_text(encoding="utf-8") if library.lyrics_txt(clean_id).exists() else ""
         ass = library.lyrics_ass(clean_id).read_text(encoding="utf-8") if library.lyrics_ass(clean_id).exists() else ""
+        alignment = read_json(library.alignment_json(clean_id), default={}) or {}
         jobs = [job.to_dict() for job in runner.list_jobs(limit=20) if job.song_id == clean_id]
         auto_refresh = status.get("state") in {"queued", "running"} or any(
             job.get("state") in {"queued", "running"} for job in jobs
         )
-        body = render_detail(clean_id, summary, status, report, lyrics, ass, available_logs(library, clean_id), jobs)
+        body = render_detail(
+            clean_id,
+            summary,
+            status,
+            report,
+            lyrics,
+            ass,
+            alignment,
+            available_logs(library, clean_id),
+            jobs,
+            run_doctor(library, clean_id),
+        )
         return page(clean_id, body, auto_refresh=auto_refresh)
 
     @app.post("/songs/{song_id}/lyrics")
@@ -100,6 +117,24 @@ def create_app(library: LibraryPaths | None = None):
         save_lyrics_text(library, song_id, data.decode("utf-8-sig"))
         return RedirectResponse(song_url(song_id), status_code=303)
 
+    @app.post("/songs/{song_id}/alignment")
+    async def save_alignment(song_id: str, request: Request):
+        clean_id = normalize_song_id(song_id)
+        form = await request.form()
+        updates = []
+        line_count = int(form.get("line_count") or 0)
+        for index in range(line_count):
+            updates.append(
+                {
+                    "index": index,
+                    "start": form.get(f"line_{index}_start"),
+                    "end": form.get(f"line_{index}_end"),
+                    "text": form.get(f"line_{index}_text"),
+                }
+            )
+        runner.submit(clean_id, "edit-subtitles", {"updates": updates})
+        return RedirectResponse(song_url(clean_id), status_code=303)
+
     @app.post("/songs/{song_id}/run/{stage}")
     def run_stage(
         song_id: str,
@@ -109,7 +144,17 @@ def create_app(library: LibraryPaths | None = None):
         audio_order: str = Form("instrumental-first"),
     ):
         clean_id = normalize_song_id(song_id)
-        if stage not in {"probe", "extract", "separate", "align", "mux", "replace-audio", "clean-work", "process"}:
+        if stage not in {
+            "probe",
+            "preview-tracks",
+            "extract",
+            "separate",
+            "align",
+            "mux",
+            "replace-audio",
+            "clean-work",
+            "process",
+        }:
             return PlainTextResponse(f"Unknown stage: {stage}", status_code=400)
         runner.submit(
             clean_id,
@@ -118,9 +163,21 @@ def create_app(library: LibraryPaths | None = None):
                 "audio_index": audio_index,
                 "keep_audio_index": keep_audio_index,
                 "audio_order": audio_order,
+                "duration": 20.0,
             },
         )
         return RedirectResponse(song_url(clean_id), status_code=303)
+
+    @app.post("/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str):
+        runner.cancel(job_id)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/jobs/{job_id}/retry")
+    def retry_job(job_id: str):
+        job = runner.retry(job_id)
+        location = song_url(job.song_id) if job else "/"
+        return RedirectResponse(location, status_code=303)
 
     @app.post("/songs/{song_id}/shift")
     def shift_subtitles(song_id: str, seconds: float = Form(...)):
@@ -157,10 +214,21 @@ def create_app(library: LibraryPaths | None = None):
             path = library.final_mkv(clean_id)
         elif kind == "audio-replaced-mkv":
             path = library.audio_replaced_mkv(clean_id)
+        elif kind.startswith("take/"):
+            filename = Path(kind.split("/", 1)[1]).name
+            path = library.takes_dir(clean_id) / filename
         elif kind in {"instrumental", "mix", "vocals"}:
             path = audio_path(library, clean_id, kind)
         else:
             return PlainTextResponse("Download not found", status_code=404)
+        if not path.exists():
+            return PlainTextResponse("File not found", status_code=404)
+        return FileResponse(path, filename=path.name)
+
+    @app.get("/songs/{song_id}/download/take/{filename}")
+    def download_take(song_id: str, filename: str):
+        clean_id = normalize_song_id(song_id)
+        path = library.takes_dir(clean_id) / Path(filename).name
         if not path.exists():
             return PlainTextResponse("File not found", status_code=404)
         return FileResponse(path, filename=path.name)
@@ -191,6 +259,12 @@ def audio_path(library: LibraryPaths, song_id: str, kind: str) -> Path:
         return library.mix_wav(song_id)
     if kind == "vocals":
         return library.vocals_wav(song_id)
+    if kind.startswith("track-preview-"):
+        try:
+            index = int(kind.removeprefix("track-preview-")) - 1
+        except ValueError as exc:
+            raise KtvError(f"unknown audio kind: {kind}") from exc
+        return library.track_preview_wav(song_id, index)
     raise KtvError(f"unknown audio kind: {kind}")
 
 

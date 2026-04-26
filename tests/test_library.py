@@ -1,3 +1,5 @@
+from ktv_mux.alignment import generate_even_alignment
+from ktv_mux.jsonio import write_json
 from ktv_mux.library import delete_song, import_source, song_summary
 from ktv_mux.paths import LibraryPaths
 from ktv_mux.pipeline import Pipeline
@@ -29,6 +31,16 @@ def test_clean_work_keeps_outputs_and_removes_regenerable_files(tmp_path):
     assert not library.mix_wav("song").exists()
     assert not library.vocals_wav("song").exists()
     assert library.instrumental_wav("song").exists()
+
+
+def test_edit_subtitles_rebuilds_alignment_and_ass(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+    library.ensure_song_dirs("song")
+    write_json(library.alignment_json("song"), generate_even_alignment(["旧歌词"], duration=4))
+
+    Pipeline(library).edit_subtitles("song", [{"index": 0, "start": 1, "end": 2, "text": "新歌词"}])
+
+    assert "新" in library.lyrics_ass("song").read_text(encoding="utf-8")
 
 
 def test_delete_song_removes_library_folders(tmp_path):

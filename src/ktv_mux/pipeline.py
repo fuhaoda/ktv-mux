@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import fcntl
+import shutil
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from .alignment import align_lyrics, shift_alignment
+from .alignment import align_lyrics, shift_alignment, update_alignment_lines
 from .ass import build_ass
 from .errors import PipelineStateError
 from .jsonio import read_json, write_json
 from .library import import_source, load_song, save_lyrics_file
-from .media import extract_mix, mux_ktv, probe_media, replace_audio_track, run_demucs_two_stems
-from .models import Song, append_stage_status, update_report
+from .media import extract_mix, extract_preview, mux_ktv, probe_media, replace_audio_track, run_demucs_two_stems
+from .models import Song, append_stage_status, update_report, utc_now
 from .paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
 from .quality import separation_quality_report
 
@@ -93,6 +94,42 @@ class Pipeline:
 
         return self._run_stage(clean_id, "extract", stage)
 
+    def preview_tracks(self, song_id: str, *, duration: float = 20.0) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        source = self.library.source_path(clean_id)
+
+        def stage() -> dict[str, Any]:
+            info = probe_media(source)
+            _validate_probe_has_required_streams(info)
+            previews = []
+            for audio_index, stream in enumerate(info["audio_streams"]):
+                out = self.library.track_preview_wav(clean_id, audio_index)
+                extract_preview(source, out, audio_index=audio_index, duration=duration)
+                previews.append(
+                    {
+                        "audio_index": audio_index,
+                        "track": audio_index + 1,
+                        "path": str(out),
+                        "codec": stream.get("codec_name"),
+                        "language": (stream.get("tags") or {}).get("language"),
+                    }
+                )
+            update_report(
+                self.library.report_json(clean_id),
+                probe={
+                    "duration": info["duration"],
+                    "video_streams": len(info["video_streams"]),
+                    "audio_streams": len(info["audio_streams"]),
+                    "subtitle_streams": len(info["subtitle_streams"]),
+                    "format": info["format"],
+                    "streams": info["streams"],
+                },
+                track_previews=previews,
+            )
+            return {"track_previews": previews}
+
+        return self._run_stage(clean_id, "preview-tracks", stage)
+
     def separate(self, song_id: str, *, model: str = "htdemucs") -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
         mix = self._require_file(self.library.mix_wav(clean_id), "Run extract before separate.")
@@ -114,6 +151,7 @@ class Pipeline:
                     instrumental_wav=self.library.instrumental_wav(clean_id),
                     vocals_wav=self.library.vocals_wav(clean_id),
                 ),
+                instrumental_take=str(_archive_take(self.library, clean_id, self.library.instrumental_wav(clean_id))),
             )
             return result
 
@@ -176,6 +214,33 @@ class Pipeline:
 
         return self._run_stage(clean_id, "shift-subtitles", stage)
 
+    def edit_subtitles(self, song_id: str, updates: list[dict[str, Any]]) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        alignment_path = self._require_file(
+            self.library.alignment_json(clean_id),
+            "Run align before editing subtitles.",
+        )
+
+        def stage() -> dict[str, Any]:
+            alignment = read_json(alignment_path, default={}) or {}
+            edited = update_alignment_lines(alignment, updates)
+            write_json(alignment_path, edited)
+            ass_text = build_ass(edited, title=clean_id)
+            self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
+            self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
+            update_report(
+                self.library.report_json(clean_id),
+                alignment={
+                    **((read_json(self.library.report_json(clean_id), default={}) or {}).get("alignment") or {}),
+                    "alignment_json": str(alignment_path),
+                    "lyrics_ass": str(self.library.lyrics_ass(clean_id)),
+                    "manual_edits": True,
+                },
+            )
+            return edited
+
+        return self._run_stage(clean_id, "edit-subtitles", stage)
+
     def mux(
         self,
         song_id: str,
@@ -207,6 +272,7 @@ class Pipeline:
                 self.library.report_json(clean_id),
                 final_mkv=str(result),
                 audio_order=audio_order,
+                final_mkv_take=str(_archive_take(self.library, clean_id, result)),
             )
             return result
 
@@ -241,6 +307,7 @@ class Pipeline:
             update_report(
                 self.library.report_json(clean_id),
                 audio_replaced_mkv=str(result),
+                audio_replaced_mkv_take=str(_archive_take(self.library, clean_id, result)),
                 kept_audio_index=keep_audio_index,
                 kept_audio_track=keep_audio_index + 1,
                 copied_source_subtitles=copy_subtitles,
@@ -264,10 +331,13 @@ class Pipeline:
                     removed.append(str(path))
             demucs_dir = self.library.work_dir(clean_id) / "demucs"
             if demucs_dir.exists():
-                import shutil
-
                 shutil.rmtree(demucs_dir)
                 removed.append(str(demucs_dir))
+            previews_dir = self.library.previews_dir(clean_id)
+            if previews_dir.exists():
+                shutil.rmtree(previews_dir)
+                previews_dir.mkdir(parents=True, exist_ok=True)
+                removed.append(str(previews_dir))
             update_report(self.library.report_json(clean_id), cleaned_work_files=removed)
             return {"removed": removed}
 
@@ -357,6 +427,16 @@ def _validate_probe_has_required_streams(info: dict[str, Any]) -> None:
         raise PipelineStateError("Source media has no video stream.")
     if not info["audio_streams"]:
         raise PipelineStateError("Source media has no audio stream.")
+
+
+def _archive_take(library: LibraryPaths, song_id: str, path: Path) -> Path:
+    if not path.exists():
+        return path
+    stamp = utc_now().replace("+00:00", "Z").replace(":", "").replace("-", "")
+    take = library.takes_dir(song_id) / f"{path.stem}.{stamp}{path.suffix}"
+    take.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, take)
+    return take
 
 
 @contextmanager

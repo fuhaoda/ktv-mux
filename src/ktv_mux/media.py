@@ -82,10 +82,47 @@ def build_extract_mix_cmd(source: Path, output_wav: Path, *, audio_index: int = 
     ]
 
 
+def build_extract_preview_cmd(
+    source: Path,
+    output_wav: Path,
+    *,
+    audio_index: int = 0,
+    duration: float = 20.0,
+) -> list[str]:
+    if audio_index < 0:
+        raise KtvError("audio_index must be 0 or greater")
+    return [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i",
+        str(source),
+        "-map",
+        f"0:a:{audio_index}",
+        "-t",
+        f"{duration:.3f}",
+        "-vn",
+        "-ac",
+        "2",
+        "-ar",
+        "44100",
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ]
+
+
 def extract_mix(source: Path, output_wav: Path, *, audio_index: int = 0) -> Path:
     require_command("ffmpeg")
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     run_command(build_extract_mix_cmd(source, output_wav, audio_index=audio_index))
+    return output_wav
+
+
+def extract_preview(source: Path, output_wav: Path, *, audio_index: int = 0, duration: float = 20.0) -> Path:
+    require_command("ffmpeg")
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    run_command(build_extract_preview_cmd(source, output_wav, audio_index=audio_index, duration=duration))
     return output_wav
 
 
