@@ -55,6 +55,10 @@ class LibraryPaths:
     def output_root(self) -> Path:
         return self.root / "output"
 
+    @property
+    def jobs_root(self) -> Path:
+        return self.root / "jobs"
+
     def raw_dir(self, song_id: str) -> Path:
         return self.raw_root / normalize_song_id(song_id)
 
@@ -114,10 +118,20 @@ class LibraryPaths:
     def status_json(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "status.json"
 
+    def stage_log(self, song_id: str, stage: str) -> Path:
+        return self.work_dir(song_id) / "logs" / f"{normalize_song_id(stage)}.log"
+
+    def lock_file(self, song_id: str) -> Path:
+        return self.work_dir(song_id) / ".lock"
+
+    def job_json(self, job_id: str) -> Path:
+        return self.jobs_root / f"{job_id}.json"
+
     def ensure_song_dirs(self, song_id: str) -> None:
         self.raw_dir(song_id).mkdir(parents=True, exist_ok=True)
         self.work_dir(song_id).mkdir(parents=True, exist_ok=True)
         self.output_dir(song_id).mkdir(parents=True, exist_ok=True)
+        (self.work_dir(song_id) / "logs").mkdir(parents=True, exist_ok=True)
 
     def list_song_ids(self) -> list[str]:
         if not self.raw_root.exists():

@@ -8,7 +8,7 @@ from typing import Any
 
 from .errors import KtvError
 from .jsonio import read_json
-from .library import song_summary
+from .library import delete_song, song_summary
 from .paths import LibraryPaths
 from .pipeline import Pipeline
 
@@ -50,6 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     align_p.add_argument("song_id")
     align_p.add_argument("--backend", default="auto", choices=["auto", "funasr", "simple"])
 
+    shift_p = sub.add_parser("shift", help="shift generated subtitle timing and rebuild ASS")
+    shift_p.add_argument("song_id")
+    shift_p.add_argument(
+        "--seconds",
+        type=float,
+        required=True,
+        help="positive delays subtitles; negative makes them earlier",
+    )
+
     mux_p = sub.add_parser("mux", help="mux final dual-audio MKV")
     mux_p.add_argument("song_id")
     mux_p.add_argument(
@@ -75,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not copy source subtitle streams",
     )
+
+    clean_p = sub.add_parser("clean-work", help="remove regenerable work files for one song")
+    clean_p.add_argument("song_id")
+
+    delete_p = sub.add_parser("delete", help="delete raw/work/output folders for one song")
+    delete_p.add_argument("song_id")
 
     process_p = sub.add_parser("process", help="run probe/extract/separate/align/mux")
     process_p.add_argument("song_id")
@@ -140,6 +155,13 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
             "alignment_json": str(library.alignment_json(args.song_id)),
             "lyrics_ass": str(library.lyrics_ass(args.song_id)),
         }
+    if args.command == "shift":
+        pipeline.shift_subtitles(args.song_id, seconds=args.seconds)
+        return {
+            "alignment_json": str(library.alignment_json(args.song_id)),
+            "lyrics_ass": str(library.lyrics_ass(args.song_id)),
+            "subtitle_shift_seconds": args.seconds,
+        }
     if args.command == "mux":
         return {"final_mkv": str(pipeline.mux(args.song_id, audio_order=args.audio_order))}
     if args.command == "replace-audio":
@@ -152,6 +174,11 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
                 )
             )
         }
+    if args.command == "clean-work":
+        return pipeline.clean_work(args.song_id)
+    if args.command == "delete":
+        delete_song(library, args.song_id)
+        return {"deleted": args.song_id}
     if args.command == "process":
         return pipeline.process(args.song_id, align_backend=args.align_backend)
     if args.command == "batch":

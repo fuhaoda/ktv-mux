@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from .commands import require_command, run_command
+from .commands import require_command, run_command, run_command_logged
 from .errors import KtvError
 
 
@@ -134,6 +135,7 @@ def run_demucs_two_stems(
     output_vocals: Path,
     *,
     model: str = "htdemucs",
+    log_path: Path | None = None,
 ) -> dict[str, Any]:
     demucs_root = work_dir / "demucs"
     demucs_root.mkdir(parents=True, exist_ok=True)
@@ -143,7 +145,11 @@ def run_demucs_two_stems(
     for candidate in _device_attempts(device):
         attempted.append(candidate)
         try:
-            run_command(build_demucs_cmd(mix_wav, demucs_root, model=model, device=candidate))
+            cmd = build_demucs_cmd(mix_wav, demucs_root, model=model, device=candidate)
+            if log_path:
+                run_command_logged(cmd, log_path=log_path)
+            else:
+                run_command(cmd)
             break
         except KtvError:
             if candidate == "cpu":

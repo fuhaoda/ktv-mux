@@ -1,4 +1,4 @@
-.PHONY: setup setup-separation setup-ml test serve smoke clean
+.PHONY: setup setup-separation setup-ml test lint serve smoke clean
 
 PYTHON ?= python3.12
 VENV ?= .venv
@@ -18,6 +18,9 @@ setup-ml:
 test:
 	$(VENV)/bin/python -m pytest -q
 
+lint:
+	$(VENV)/bin/python -m ruff check .
+
 serve:
 	$(KTV) --library library serve --host 127.0.0.1 --port 8000
 
@@ -27,6 +30,5 @@ smoke:
 	$(KTV) extract 朋友-周华健 --audio-index 0
 
 clean:
-	rm -rf .pytest_cache src/ktv_mux.egg-info
+	rm -rf .pytest_cache .ruff_cache src/ktv_mux.egg-info
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +
-

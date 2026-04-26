@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import fcntl
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any
 
-from .alignment import align_lyrics
+from .alignment import align_lyrics, shift_alignment
 from .ass import build_ass
 from .errors import PipelineStateError
-from .jsonio import write_json
+from .jsonio import read_json, write_json
 from .library import import_source, load_song, save_lyrics_file
 from .media import extract_mix, mux_ktv, probe_media, replace_audio_track, run_demucs_two_stems
 from .models import Song, append_stage_status, update_report
 from .paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
+from .quality import separation_quality_report
 
 StageFunc = Callable[[], Any]
 
@@ -54,6 +58,7 @@ class Pipeline:
 
         def stage() -> dict[str, Any]:
             info = probe_media(source)
+            _validate_probe_has_required_streams(info)
             update_report(
                 self.library.report_json(clean_id),
                 source=str(source),
@@ -76,6 +81,7 @@ class Pipeline:
         mix = self.library.mix_wav(clean_id)
 
         def stage() -> Path:
+            _validate_audio_index(source, audio_index)
             result = extract_mix(source, mix, audio_index=audio_index)
             update_report(
                 self.library.report_json(clean_id),
@@ -98,8 +104,17 @@ class Pipeline:
                 self.library.instrumental_wav(clean_id),
                 self.library.vocals_wav(clean_id),
                 model=model,
+                log_path=self.library.stage_log(clean_id, "separate"),
             )
-            update_report(self.library.report_json(clean_id), separation=result)
+            update_report(
+                self.library.report_json(clean_id),
+                separation=result,
+                quality=separation_quality_report(
+                    mix_wav=mix,
+                    instrumental_wav=self.library.instrumental_wav(clean_id),
+                    vocals_wav=self.library.vocals_wav(clean_id),
+                ),
+            )
             return result
 
         return self._run_stage(clean_id, "separate", stage)
@@ -132,6 +147,34 @@ class Pipeline:
             return alignment
 
         return self._run_stage(clean_id, "align", stage)
+
+    def shift_subtitles(self, song_id: str, *, seconds: float) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        alignment_path = self._require_file(
+            self.library.alignment_json(clean_id),
+            "Run align before shifting subtitles.",
+        )
+
+        def stage() -> dict[str, Any]:
+            alignment = read_json(alignment_path, default={}) or {}
+            shifted = shift_alignment(alignment, seconds)
+            write_json(alignment_path, shifted)
+            ass_text = build_ass(shifted, title=clean_id)
+            self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
+            self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
+            update_report(
+                self.library.report_json(clean_id),
+                subtitle_shift_seconds=seconds,
+                alignment={
+                    **((read_json(self.library.report_json(clean_id), default={}) or {}).get("alignment") or {}),
+                    "alignment_json": str(alignment_path),
+                    "lyrics_ass": str(self.library.lyrics_ass(clean_id)),
+                    "manual_offset_seconds": seconds,
+                },
+            )
+            return shifted
+
+        return self._run_stage(clean_id, "shift-subtitles", stage)
 
     def mux(
         self,
@@ -186,6 +229,7 @@ class Pipeline:
         output = self.library.audio_replaced_mkv(clean_id)
 
         def stage() -> Path:
+            _validate_audio_index(source, keep_audio_index)
             result = replace_audio_track(
                 source,
                 instrumental,
@@ -204,6 +248,30 @@ class Pipeline:
             return result
 
         return self._run_stage(clean_id, "replace-audio", stage)
+
+    def clean_work(self, song_id: str) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+
+        def stage() -> dict[str, Any]:
+            removed: list[str] = []
+            for path in [
+                self.library.mix_wav(clean_id),
+                self.library.vocals_wav(clean_id),
+                self.library.alignment_json(clean_id),
+            ]:
+                if path.exists():
+                    path.unlink()
+                    removed.append(str(path))
+            demucs_dir = self.library.work_dir(clean_id) / "demucs"
+            if demucs_dir.exists():
+                import shutil
+
+                shutil.rmtree(demucs_dir)
+                removed.append(str(demucs_dir))
+            update_report(self.library.report_json(clean_id), cleaned_work_files=removed)
+            return {"removed": removed}
+
+        return self._run_stage(clean_id, "clean-work", stage)
 
     def process(self, song_id: str, *, align_backend: str = "auto") -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
@@ -231,34 +299,35 @@ class Pipeline:
     def _run_stage(self, song_id: str, stage_name: str, func: StageFunc) -> Any:
         clean_id = normalize_song_id(song_id)
         self.library.ensure_song_dirs(clean_id)
-        append_stage_status(self.library.status_json(clean_id), stage_name, "running")
-        start = perf_counter()
-        try:
-            result = func()
-        except Exception as exc:
-            append_stage_status(self.library.status_json(clean_id), stage_name, "failed", str(exc))
-            update_report(self.library.report_json(clean_id), failure=str(exc), failed_stage=stage_name)
-            raise
-        elapsed = round(perf_counter() - start, 3)
-        append_stage_status(
-            self.library.status_json(clean_id),
-            stage_name,
-            "completed",
-            f"completed in {elapsed}s",
-        )
-        update_report(
-            self.library.report_json(clean_id),
-            last_completed_stage=stage_name,
-            failure=None,
-            failed_stage=None,
-        )
-        try:
-            song = load_song(self.library, clean_id)
-            song.status = stage_name
-            song.save(self.library.song_json(clean_id))
-        except FileNotFoundError:
-            pass
-        return result
+        with song_lock(self.library, clean_id):
+            append_stage_status(self.library.status_json(clean_id), stage_name, "running")
+            start = perf_counter()
+            try:
+                result = func()
+            except Exception as exc:
+                append_stage_status(self.library.status_json(clean_id), stage_name, "failed", str(exc))
+                update_report(self.library.report_json(clean_id), failure=str(exc), failed_stage=stage_name)
+                raise
+            elapsed = round(perf_counter() - start, 3)
+            append_stage_status(
+                self.library.status_json(clean_id),
+                stage_name,
+                "completed",
+                f"completed in {elapsed}s",
+            )
+            update_report(
+                self.library.report_json(clean_id),
+                last_completed_stage=stage_name,
+                failure=None,
+                failed_stage=None,
+            )
+            try:
+                song = load_song(self.library, clean_id)
+                song.status = stage_name
+                song.save(self.library.song_json(clean_id))
+            except FileNotFoundError:
+                pass
+            return result
 
     @staticmethod
     def _require_file(path: Path, message: str) -> Path:
@@ -270,3 +339,33 @@ class Pipeline:
 def _probe_duration(path: Path) -> float:
     info = probe_media(path)
     return float(info.get("duration") or 0.0)
+
+
+def _validate_audio_index(source: Path, audio_index: int) -> None:
+    if audio_index < 0:
+        raise PipelineStateError("Audio track index must be 0 or greater.")
+    info = probe_media(source)
+    count = len(info["audio_streams"])
+    if audio_index >= count:
+        raise PipelineStateError(
+            f"Audio Track {audio_index + 1} does not exist. This source has {count} audio track(s)."
+        )
+
+
+def _validate_probe_has_required_streams(info: dict[str, Any]) -> None:
+    if not info["video_streams"]:
+        raise PipelineStateError("Source media has no video stream.")
+    if not info["audio_streams"]:
+        raise PipelineStateError("Source media has no audio stream.")
+
+
+@contextmanager
+def song_lock(library: LibraryPaths, song_id: str) -> Iterator[None]:
+    path = library.lock_file(song_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)

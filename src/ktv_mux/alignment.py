@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +73,7 @@ def parse_funasr_result(result: Any, fallback_lines: list[str]) -> dict[str, Any
         if not line_times:
             continue
         aligned_tokens = []
-        for token_text, timing in zip(tokens, line_times):
+        for token_text, timing in zip(tokens, line_times, strict=False):
             aligned_tokens.append(
                 {
                     "text": token_text,
@@ -182,3 +183,33 @@ def generate_even_alignment(
         "lines": aligned_lines,
     }
 
+
+def shift_alignment(alignment: dict[str, Any], offset_seconds: float) -> dict[str, Any]:
+    shifted = copy.deepcopy(alignment)
+    offset = float(offset_seconds)
+    shifted["manual_offset_seconds"] = round(offset, 3)
+    for line in shifted.get("lines", []):
+        if not isinstance(line, dict):
+            continue
+        _shift_timed_item(line, offset)
+        for token in line.get("tokens") or []:
+            if isinstance(token, dict):
+                _shift_timed_item(token, offset)
+    return shifted
+
+
+def _shift_timed_item(item: dict[str, Any], offset: float) -> None:
+    start = _shift_time(item.get("start"), offset)
+    end = _shift_time(item.get("end"), offset)
+    if end <= start:
+        end = round(start + 0.01, 3)
+    item["start"] = start
+    item["end"] = end
+
+
+def _shift_time(value: Any, offset: float) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = 0.0
+    return round(max(0.0, seconds + offset), 3)

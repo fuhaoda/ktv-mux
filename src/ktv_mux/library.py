@@ -113,6 +113,18 @@ def save_lyrics_file(library: LibraryPaths, song_id: str, source_path: Path) -> 
     return save_lyrics_text(library, song_id, text)
 
 
+def delete_song(library: LibraryPaths, song_id: str) -> None:
+    clean_id = normalize_song_id(song_id)
+    for path in [library.raw_dir(clean_id), library.work_dir(clean_id), library.output_dir(clean_id)]:
+        if path.exists():
+            shutil.rmtree(path)
+    if library.jobs_root.exists():
+        for job_path in library.jobs_root.glob("*.json"):
+            data = read_json(job_path, default={}) or {}
+            if data.get("song_id") == clean_id:
+                job_path.unlink()
+
+
 def song_summary(library: LibraryPaths, song_id: str) -> dict[str, Any]:
     summary: dict[str, Any] = {"song_id": song_id}
     song_path = library.song_json(song_id)

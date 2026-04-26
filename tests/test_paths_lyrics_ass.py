@@ -1,4 +1,4 @@
-from ktv_mux.alignment import generate_even_alignment
+from ktv_mux.alignment import generate_even_alignment, shift_alignment
 from ktv_mux.ass import ass_karaoke_text, build_ass, seconds_to_ass_time
 from ktv_mux.lyrics import parse_lyrics_text, split_tokens
 from ktv_mux.paths import derive_song_id_from_source, normalize_song_id
@@ -39,3 +39,12 @@ def test_build_ass_contains_karaoke_dialogue():
     assert "[Script Info]" in ass
     assert "Dialogue:" in ass
     assert r"{\k" in ass
+
+
+def test_shift_alignment_moves_lines_and_tokens():
+    alignment = generate_even_alignment(["朋友"], duration=4)
+    shifted = shift_alignment(alignment, 0.5)
+
+    assert shifted["manual_offset_seconds"] == 0.5
+    assert shifted["lines"][0]["start"] == alignment["lines"][0]["start"] + 0.5
+    assert shifted["lines"][0]["tokens"][0]["start"] == alignment["lines"][0]["tokens"][0]["start"] + 0.5

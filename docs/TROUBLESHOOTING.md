@@ -15,6 +15,8 @@ Use:
 ktv status SONG_ID
 ```
 
+The Web page also shows recent queued/running jobs from `library/jobs`.
+
 ## Demucs Fails With `TorchCodec is required`
 
 Install the separation extra:
@@ -45,6 +47,25 @@ ktv separate SONG_ID
 
 In the Web UI, this is `Track 2`.
 
+## Demucs Is Running For A Long Time
+
+Open:
+
+```text
+library/work/{song_id}/logs/separate.log
+```
+
+The song detail page links to the same log after separation starts. First runs can be slow because Demucs downloads model weights.
+
+## Subtitles Are Early Or Late
+
+Shift timing without rerunning alignment:
+
+```bash
+ktv shift SONG_ID --seconds 0.25   # later
+ktv shift SONG_ID --seconds -0.25  # earlier
+```
+
 ## Web Server Port Already In Use
 
 ```bash
@@ -52,4 +73,3 @@ lsof -iTCP:8000 -sTCP:LISTEN -n -P
 kill <PID>
 ktv serve --host 127.0.0.1 --port 8000
 ```
-
