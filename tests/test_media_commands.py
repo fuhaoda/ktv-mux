@@ -1,0 +1,86 @@
+import json
+from pathlib import Path
+
+from ktv_mux.library import build_ytdlp_cmd
+from ktv_mux.media import build_extract_mix_cmd, build_mux_cmd, build_replace_audio_track_cmd, parse_probe_json
+
+
+def test_parse_probe_json_counts_stream_types():
+    payload = {
+        "format": {"duration": "3.5", "bit_rate": "120000"},
+        "streams": [
+            {"codec_type": "video"},
+            {"codec_type": "audio"},
+            {"codec_type": "audio"},
+            {"codec_type": "subtitle"},
+        ],
+    }
+    info = parse_probe_json(json.dumps(payload))
+    assert info["duration"] == 3.5
+    assert len(info["video_streams"]) == 1
+    assert len(info["audio_streams"]) == 2
+    assert len(info["subtitle_streams"]) == 1
+
+
+def test_build_extract_mix_cmd_maps_first_audio():
+    cmd = build_extract_mix_cmd(Path("source.mkv"), Path("mix.wav"))
+    assert cmd[:3] == ["ffmpeg", "-y", "-hide_banner"]
+    assert "-map" in cmd
+    assert "0:a:0" in cmd
+    assert cmd[-1] == "mix.wav"
+
+
+def test_build_extract_mix_cmd_can_select_second_audio():
+    cmd = build_extract_mix_cmd(Path("source.mkv"), Path("mix.wav"), audio_index=1)
+    assert "0:a:1" in cmd
+
+
+def test_build_mux_cmd_has_dual_audio_metadata_and_default_instrumental():
+    cmd = build_mux_cmd(
+        Path("source.mkv"),
+        Path("instrumental.wav"),
+        Path("mix.wav"),
+        Path("lyrics.ass"),
+        Path("out.mkv"),
+    )
+    assert cmd.count("-map") == 4
+    assert "title=伴奏" in cmd
+    assert "title=原唱" in cmd
+    assert "title=歌词" in cmd
+    assert cmd[-1] == "out.mkv"
+
+
+def test_build_mux_cmd_can_keep_original_as_track_one():
+    cmd = build_mux_cmd(
+        Path("source.mkv"),
+        Path("instrumental.wav"),
+        Path("mix.wav"),
+        Path("lyrics.ass"),
+        Path("out.mkv"),
+        audio_order="original-first",
+    )
+    first_audio_map = cmd[cmd.index("0:v:0") + 1 : cmd.index("0:v:0") + 3]
+    assert first_audio_map == ["-map", "2:a:0"]
+    assert "title=原唱" in cmd
+    assert "title=伴奏" in cmd
+
+
+def test_build_ytdlp_cmd_uses_source_template():
+    cmd = build_ytdlp_cmd("https://example.invalid/watch?v=1", Path("raw/song"))
+    assert cmd[0] == "yt-dlp"
+    assert "--write-info-json" in cmd
+    assert "raw/song/source.%(ext)s" in cmd
+
+
+def test_build_replace_audio_track_cmd_preserves_original_as_track_one():
+    cmd = build_replace_audio_track_cmd(
+        Path("source.mkv"),
+        Path("instrumental.wav"),
+        Path("out.mkv"),
+        keep_audio_index=0,
+    )
+    assert cmd[cmd.index("0:v:0") + 1 : cmd.index("0:v:0") + 3] == ["-map", "0:a:0"]
+    assert "1:a:0" in cmd
+    assert "title=原唱" in cmd
+    assert "title=伴奏" in cmd
+    assert "0:s?" in cmd

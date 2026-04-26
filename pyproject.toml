@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ktv-mux"
+version = "0.1.0"
+description = "Local-first KTV MKV production pipeline"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "ktv-mux contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+web = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "python-multipart>=0.0.9",
+]
+separation = [
+  "demucs>=4.0.1",
+  "torchcodec>=0.8.0",
+]
+alignment = [
+  "funasr>=1.2.0",
+]
+ml = [
+  "demucs>=4.0.1",
+  "torchcodec>=0.8.0",
+  "funasr>=1.2.0",
+]
+dev = [
+  "httpx>=0.27",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+ktv = "ktv_mux.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: requires ffmpeg/ffprobe and bundled media assets",
+  "slow: requires heavyweight ML models or network downloads",
+]

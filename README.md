@@ -1,0 +1,99 @@
+# ktv-mux
+
+Local-first KTV MKV workshop for macOS. Import a music video, choose the source audio track, generate an instrumental with Demucs, listen to the result, and optionally create an MKV where the new instrumental replaces Track 2.
+
+The first polished workflow is built around real KTV production:
+
+1. Import a local file or URL.
+2. Probe the media tracks.
+3. Extract Track 1 or Track 2.
+4. Generate `instrumental.wav`.
+5. Listen before committing.
+6. Build an audio-replaced MKV or a full KTV MKV with ASS lyrics.
+
+## Quick Start
+
+Use Python 3.12.
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[web,dev,separation]"
+ktv serve --host 127.0.0.1 --port 8000
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+## Try The Bundled Sample
+
+```bash
+ktv import assets/朋友-周华健.mkv
+ktv probe 朋友-周华健
+ktv extract 朋友-周华健 --audio-index 0
+ktv separate 朋友-周华健
+```
+
+Listen to:
+
+```text
+library/output/朋友-周华健/instrumental.wav
+```
+
+Then create an MKV with the original Track 1 and the new instrumental as Track 2:
+
+```bash
+ktv replace-audio 朋友-周华健 --keep-audio-index 0
+```
+
+Output:
+
+```text
+library/output/朋友-周华健/朋友-周华健.audio-replaced.mkv
+```
+
+## CLI Reference
+
+```bash
+ktv import PATH_OR_URL [--song-id ID]
+ktv probe SONG_ID
+ktv extract SONG_ID --audio-index 0
+ktv separate SONG_ID
+ktv replace-audio SONG_ID --keep-audio-index 0
+ktv lyrics SONG_ID lyrics.txt
+ktv align SONG_ID --backend simple
+ktv mux SONG_ID
+ktv status SONG_ID
+ktv serve
+```
+
+`song_id` is optional on import. Local files default to the original filename without extension.
+
+Web `Track 1` is CLI `--audio-index 0`; Web `Track 2` is CLI `--audio-index 1`.
+
+## Project Docs
+
+- [Usage](docs/USAGE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+
+## Development
+
+```bash
+make setup-separation
+make test
+make serve
+```
+
+The test suite includes unit tests for path handling, command construction, ASS generation, Web upload behavior, and FFmpeg integration against the bundled sample.
+
+## Notes
+
+- `ffmpeg`, `ffprobe`, and `yt-dlp` are external command dependencies.
+- Demucs model weights download on first use.
+- Generated media under `library/` is ignored by git.
+- Only process media you have the right to use.
+
