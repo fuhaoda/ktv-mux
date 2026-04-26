@@ -38,11 +38,58 @@ class FakePipeline:
     def mux(self, song_id, *, audio_order="instrumental-first", duration_limit=None, cancel_file=None):
         self.calls.append(("mux", song_id, audio_order, duration_limit, cancel_file is not None))
 
-    def separate(self, song_id, *, model="htdemucs", device=None, cancel_file=None):
-        self.calls.append(("separate", song_id, model, device, cancel_file is not None))
+    def separate(self, song_id, *, preset="balanced", model=None, device=None, cancel_file=None):
+        self.calls.append(("separate", song_id, preset, model, device, cancel_file is not None))
+
+    def separate_sample(
+        self,
+        song_id,
+        *,
+        audio_index=0,
+        start=0.0,
+        duration=30.0,
+        preset="fast-review",
+        model=None,
+        device=None,
+        cancel_file=None,
+    ):
+        self.calls.append(
+            ("separate-sample", song_id, audio_index, start, duration, preset, model, device, cancel_file is not None)
+        )
 
     def replace_audio(self, song_id, *, keep_audio_index=0, copy_subtitles=True, duration_limit=None, cancel_file=None):
         self.calls.append(("replace-audio", song_id, keep_audio_index, copy_subtitles, duration_limit, cancel_file is not None))
+
+    def remake_track(
+        self,
+        song_id,
+        *,
+        audio_index=0,
+        keep_audio_index=0,
+        preset="balanced",
+        model=None,
+        device=None,
+        copy_subtitles=True,
+        duration_limit=None,
+        cancel_file=None,
+    ):
+        self.calls.append(
+            (
+                "remake-track",
+                song_id,
+                audio_index,
+                keep_audio_index,
+                preset,
+                model,
+                device,
+                copy_subtitles,
+                duration_limit,
+                cancel_file is not None,
+            )
+        )
+
+    def extract_embedded_subtitles(self, song_id, *, subtitle_index=0, cancel_file=None):
+        self.calls.append(("extract-subtitles", song_id, subtitle_index, cancel_file is not None))
 
     def process_from(
         self,
@@ -51,7 +98,7 @@ class FakePipeline:
         start_stage="probe",
         align_backend="auto",
         audio_index=0,
-        model="htdemucs",
+        model=None,
         device=None,
         duration_limit=None,
         cancel_file=None,
@@ -178,6 +225,28 @@ def test_run_pipeline_stage_passes_stage_parameters():
     )
     run_pipeline_stage(
         pipeline,
+        Job(
+            job_id="sample",
+            song_id="song",
+            stage="separate-sample",
+            params={"audio_index": "1", "start": "3", "duration": "8", "separation_preset": "fast-review"},
+        ),
+    )
+    run_pipeline_stage(
+        pipeline,
+        Job(
+            job_id="remake",
+            song_id="song",
+            stage="remake-track",
+            params={"audio_index": "1", "keep_audio_index": "0", "separation_preset": "balanced"},
+        ),
+    )
+    run_pipeline_stage(
+        pipeline,
+        Job(job_id="subs", song_id="song", stage="extract-subtitles", params={"subtitle_index": "0"}),
+    )
+    run_pipeline_stage(
+        pipeline,
         Job(job_id="from", song_id="song", stage="process-from", params={"start_stage": "separate", "audio_index": "1"}),
     )
 
@@ -188,5 +257,8 @@ def test_run_pipeline_stage_passes_stage_parameters():
         ("shift-subtitles", "song", -0.25),
         ("mux", "song", "instrumental-first", 3.0, False),
         ("replace-audio", "song", 1, True, 4.0, False),
-        ("process-from", "song", "separate", "auto", 1, "htdemucs", None, None, False),
+        ("separate-sample", "song", 1, 3.0, 8.0, "fast-review", None, None, False),
+        ("remake-track", "song", 1, 0, "balanced", None, None, True, None, False),
+        ("extract-subtitles", "song", 0, False),
+        ("process-from", "song", "separate", "auto", 1, None, None, None, False),
     ]

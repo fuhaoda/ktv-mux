@@ -6,6 +6,7 @@ from ktv_mux.media import (
     build_demucs_cmd,
     build_extract_mix_cmd,
     build_extract_preview_cmd,
+    build_extract_subtitle_cmd,
     build_mux_cmd,
     build_normalize_wav_cmd,
     build_replace_audio_track_cmd,
@@ -56,6 +57,13 @@ def test_build_extract_preview_cmd_can_start_later():
     assert "31.250" in cmd
 
 
+def test_build_extract_subtitle_cmd_maps_subtitle_track():
+    cmd = build_extract_subtitle_cmd(Path("source.mkv"), Path("lyrics.ass"), subtitle_index=1)
+    assert "0:s:1" in cmd
+    assert "-c:s" in cmd
+    assert cmd[-1] == "lyrics.ass"
+
+
 def test_build_demucs_cmd_can_select_device():
     cmd = build_demucs_cmd(Path("mix.wav"), Path("demucs"), model="htdemucs_ft", device="cpu")
     assert "htdemucs_ft" in cmd
@@ -100,6 +108,21 @@ def test_build_mux_cmd_can_keep_original_as_track_one():
     assert "title=伴奏" in cmd
 
 
+def test_build_mux_cmd_accepts_track_titles():
+    cmd = build_mux_cmd(
+        Path("source.mkv"),
+        Path("instrumental.wav"),
+        Path("mix.wav"),
+        Path("lyrics.ass"),
+        Path("out.mkv"),
+        instrumental_title="Karaoke",
+        original_title="Guide",
+    )
+
+    assert "title=Karaoke" in cmd
+    assert "title=Guide" in cmd
+
+
 def test_build_ytdlp_cmd_uses_source_template():
     cmd = build_ytdlp_cmd("https://example.invalid/watch?v=1", Path("raw/song"))
     assert cmd[0] == "yt-dlp"
@@ -119,3 +142,19 @@ def test_build_replace_audio_track_cmd_preserves_original_as_track_one():
     assert "title=原唱" in cmd
     assert "title=伴奏" in cmd
     assert "0:s?" in cmd
+
+
+def test_build_replace_audio_track_cmd_can_skip_subtitles_and_rename_tracks():
+    cmd = build_replace_audio_track_cmd(
+        Path("source.mkv"),
+        Path("instrumental.wav"),
+        Path("out.mkv"),
+        keep_audio_index=0,
+        copy_subtitles=False,
+        instrumental_title="Karaoke",
+        original_title="Guide",
+    )
+
+    assert "0:s?" not in cmd
+    assert "title=Karaoke" in cmd
+    assert "title=Guide" in cmd

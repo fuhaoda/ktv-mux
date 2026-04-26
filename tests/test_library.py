@@ -1,6 +1,14 @@
 from ktv_mux.alignment import generate_even_alignment
 from ktv_mux.jsonio import read_json, write_json
-from ktv_mux.library import delete_song, import_source, rename_song, save_lyrics_file, save_lyrics_text, song_summary
+from ktv_mux.library import (
+    delete_song,
+    import_source,
+    rename_song,
+    save_lyrics_file,
+    save_lyrics_text,
+    song_summary,
+    update_song_metadata,
+)
 from ktv_mux.paths import LibraryPaths
 from ktv_mux.pipeline import Pipeline
 
@@ -81,6 +89,18 @@ def test_save_lyrics_text_writes_lrc_alignment(tmp_path):
     alignment = read_json(library.alignment_json("song"))
     assert alignment["backend"] == "lrc"
     assert alignment["lines"][0]["end"] == 3.0
+    assert song_summary(library, "song")["lyrics_versions"]
+
+
+def test_update_song_metadata_saves_tags_and_rating(tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+
+    song = update_song_metadata(library, "song", tags=["duet", " needs-review "], rating=9)
+    summary = song_summary(library, "song")
+
+    assert song.rating == 5
+    assert summary["tags"] == ["duet", "needs-review"]
+    assert summary["rating"] == 5
 
 
 def test_save_lyrics_file_detects_encoding_and_keeps_original(tmp_path):

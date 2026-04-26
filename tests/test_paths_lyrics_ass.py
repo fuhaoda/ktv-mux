@@ -8,12 +8,14 @@ from ktv_mux.alignment import (
 )
 from ktv_mux.ass import ass_karaoke_text, build_ass, seconds_to_ass_time
 from ktv_mux.lyrics import (
+    ass_text_to_alignment,
     extract_lrc_entries,
     lrc_text_to_alignment,
     normalize_lyrics_text,
     parse_lrc_text,
     parse_lyrics_text,
     split_tokens,
+    srt_text_to_alignment,
 )
 from ktv_mux.paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
 
@@ -31,6 +33,8 @@ def test_library_paths_include_previews_and_takes(tmp_path):
     library = LibraryPaths(tmp_path / "library")
     library.ensure_song_dirs("song")
     assert library.track_preview_wav("song", 1).name == "track-2.wav"
+    assert library.instrumental_sample_wav("song").name == "instrumental.sample.wav"
+    assert library.lyrics_versions_dir("song").name == "lyrics-versions"
     assert library.takes_dir("song").exists()
 
 
@@ -57,6 +61,30 @@ def test_lrc_timestamps_become_initial_alignment():
     assert alignment["lines"][0]["tokens"][0]["text"] == "朋"
 
 
+def test_srt_text_to_alignment_extracts_timed_lines():
+    alignment = srt_text_to_alignment(
+        "1\n00:00:01,000 --> 00:00:03,500\n朋友一生一起走\n\n2\n00:00:04.000 --> 00:00:05.000\n第二句\n"
+    )
+
+    assert alignment["backend"] == "srt"
+    assert alignment["lines"][0]["start"] == 1.0
+    assert alignment["lines"][0]["end"] == 3.5
+    assert alignment["lines"][0]["text"] == "朋友一生一起走"
+
+
+def test_ass_text_to_alignment_extracts_dialogues():
+    alignment = ass_text_to_alignment(
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Text\n"
+        r"Dialogue: 0,0:00:01.00,0:00:03.00,Default,{\k25}朋友\N一起走"
+        "\n"
+    )
+
+    assert alignment["backend"] == "ass"
+    assert alignment["lines"][0]["start"] == 1.0
+    assert alignment["lines"][0]["text"] == "朋友 一起走"
+
+
 def test_split_tokens_uses_chars_for_chinese_and_words_for_spaced_text():
     assert split_tokens("朋友一生一起走") == list("朋友一生一起走")
     assert split_tokens("hello world") == ["hello", "world"]
@@ -79,6 +107,18 @@ def test_build_ass_contains_karaoke_dialogue():
     assert "[Script Info]" in ass
     assert "Dialogue:" in ass
     assert r"{\k" in ass
+
+
+def test_build_ass_accepts_style_overrides():
+    alignment = generate_even_alignment(["朋友"], duration=2)
+    ass = build_ass(
+        alignment,
+        title="朋友",
+        style={"font_size": 56, "margin_v": 72, "primary_colour": "&H00F0F0F0", "secondary_colour": "&H000000FF"},
+    )
+
+    assert "Style: KTV,Arial Unicode MS,56,&H00F0F0F0,&H000000FF" in ass
+    assert ",72,1" in ass
 
 
 def test_shift_alignment_moves_lines_and_tokens():

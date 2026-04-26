@@ -116,6 +116,23 @@ def build_extract_preview_cmd(
     return cmd
 
 
+def build_extract_subtitle_cmd(source: Path, output_path: Path, *, subtitle_index: int = 0) -> list[str]:
+    if subtitle_index < 0:
+        raise KtvError("subtitle_index must be 0 or greater")
+    return [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i",
+        str(source),
+        "-map",
+        f"0:s:{subtitle_index}",
+        "-c:s",
+        "copy",
+        str(output_path),
+    ]
+
+
 def extract_mix(
     source: Path,
     output_wav: Path,
@@ -145,6 +162,19 @@ def extract_preview(
         cancel_file=cancel_file,
     )
     return output_wav
+
+
+def extract_subtitle(
+    source: Path,
+    output_path: Path,
+    *,
+    subtitle_index: int = 0,
+    cancel_file: Path | None = None,
+) -> Path:
+    require_command("ffmpeg")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    run_command(build_extract_subtitle_cmd(source, output_path, subtitle_index=subtitle_index), cancel_file=cancel_file)
+    return output_path
 
 
 def detect_torch_device() -> str | None:
@@ -257,18 +287,20 @@ def build_mux_cmd(
     *,
     duration_limit: float | None = None,
     audio_order: str = "instrumental-first",
+    instrumental_title: str = "伴奏",
+    original_title: str = "原唱",
 ) -> list[str]:
     if audio_order not in {"instrumental-first", "original-first"}:
         raise KtvError(f"unsupported audio_order: {audio_order}")
     if audio_order == "instrumental-first":
         audio_inputs = [
-            ("1:a:0", "伴奏", "default"),
-            ("2:a:0", "原唱", "0"),
+            ("1:a:0", instrumental_title, "default"),
+            ("2:a:0", original_title, "0"),
         ]
     else:
         audio_inputs = [
-            ("2:a:0", "原唱", "0"),
-            ("1:a:0", "伴奏", "default"),
+            ("2:a:0", original_title, "0"),
+            ("1:a:0", instrumental_title, "default"),
         ]
 
     cmd = [
@@ -338,6 +370,8 @@ def mux_ktv(
     *,
     duration_limit: float | None = None,
     audio_order: str = "instrumental-first",
+    instrumental_title: str = "伴奏",
+    original_title: str = "原唱",
     cancel_file: Path | None = None,
 ) -> Path:
     require_command("ffmpeg")
@@ -351,6 +385,8 @@ def mux_ktv(
             output_mkv,
             duration_limit=duration_limit,
             audio_order=audio_order,
+            instrumental_title=instrumental_title,
+            original_title=original_title,
         ),
         cancel_file=cancel_file,
     )
@@ -365,6 +401,8 @@ def build_replace_audio_track_cmd(
     keep_audio_index: int = 0,
     copy_subtitles: bool = True,
     duration_limit: float | None = None,
+    instrumental_title: str = "伴奏",
+    original_title: str = "原唱",
 ) -> list[str]:
     if keep_audio_index < 0:
         raise KtvError("keep_audio_index must be 0 or greater")
@@ -397,11 +435,11 @@ def build_replace_audio_track_cmd(
             "-c:s",
             "copy",
             "-metadata:s:a:0",
-            "title=原唱",
+            f"title={original_title}",
             "-metadata:s:a:0",
             "language=zho",
             "-metadata:s:a:1",
-            "title=伴奏",
+            f"title={instrumental_title}",
             "-metadata:s:a:1",
             "language=zho",
             "-disposition:a:0",
@@ -424,6 +462,8 @@ def replace_audio_track(
     keep_audio_index: int = 0,
     copy_subtitles: bool = True,
     duration_limit: float | None = None,
+    instrumental_title: str = "伴奏",
+    original_title: str = "原唱",
     cancel_file: Path | None = None,
 ) -> Path:
     require_command("ffmpeg")
@@ -436,6 +476,8 @@ def replace_audio_track(
             keep_audio_index=keep_audio_index,
             copy_subtitles=copy_subtitles,
             duration_limit=duration_limit,
+            instrumental_title=instrumental_title,
+            original_title=original_title,
         ),
         cancel_file=cancel_file,
     )

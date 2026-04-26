@@ -59,6 +59,10 @@ class LibraryPaths:
     def jobs_root(self) -> Path:
         return self.root / "jobs"
 
+    @property
+    def inbox_dir(self) -> Path:
+        return self.root / "inbox"
+
     def raw_dir(self, song_id: str) -> Path:
         return self.raw_root / normalize_song_id(song_id)
 
@@ -98,6 +102,9 @@ class LibraryPaths:
     def vocals_wav(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "vocals.wav"
 
+    def sample_mix_wav(self, song_id: str) -> Path:
+        return self.work_dir(song_id) / "sample-mix.wav"
+
     def previews_dir(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "track-previews"
 
@@ -108,11 +115,23 @@ class LibraryPaths:
     def instrumental_wav(self, song_id: str) -> Path:
         return self.output_dir(song_id) / "instrumental.wav"
 
+    def instrumental_sample_wav(self, song_id: str) -> Path:
+        return self.output_dir(song_id) / "instrumental.sample.wav"
+
+    def vocals_sample_wav(self, song_id: str) -> Path:
+        return self.output_dir(song_id) / "vocals.sample.wav"
+
     def normalized_instrumental_wav(self, song_id: str) -> Path:
         return self.output_dir(song_id) / "instrumental.normalized.wav"
 
     def original_lyrics_file(self, song_id: str, suffix: str = ".txt") -> Path:
         return self.raw_dir(song_id) / f"lyrics.original{suffix or '.txt'}"
+
+    def embedded_lyrics_file(self, song_id: str, suffix: str = ".ass") -> Path:
+        return self.raw_dir(song_id) / f"lyrics.embedded{suffix or '.ass'}"
+
+    def lyrics_versions_dir(self, song_id: str) -> Path:
+        return self.raw_dir(song_id) / "lyrics-versions"
 
     def alignment_json(self, song_id: str) -> Path:
         return self.work_dir(song_id) / "alignment.json"
@@ -163,6 +182,7 @@ class LibraryPaths:
         self.raw_dir(song_id).mkdir(parents=True, exist_ok=True)
         self.work_dir(song_id).mkdir(parents=True, exist_ok=True)
         self.output_dir(song_id).mkdir(parents=True, exist_ok=True)
+        self.inbox_dir.mkdir(parents=True, exist_ok=True)
         (self.work_dir(song_id) / "logs").mkdir(parents=True, exist_ok=True)
         self.takes_dir(song_id).mkdir(parents=True, exist_ok=True)
         self.previews_dir(song_id).mkdir(parents=True, exist_ok=True)

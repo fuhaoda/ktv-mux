@@ -5,11 +5,12 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .ass import build_ass
 from .commands import require_command, run_command, run_command_logged
 from .errors import KtvError
 from .jsonio import read_json, write_json
-from .lyrics import lrc_text_to_alignment, normalize_lyrics_text
-from .models import Song, update_report
+from .lyrics import alignment_to_plain_text, lrc_text_to_alignment, normalize_lyrics_text, timed_text_to_alignment
+from .models import Song, update_report, utc_now
 from .paths import LibraryPaths, derive_song_id_from_source, is_url, normalize_song_id
 
 
@@ -89,6 +90,7 @@ def record_imported_source(
         library.report_json(clean_id),
         source_fingerprint=file_fingerprint(source),
         duplicate_sources=duplicates,
+        duplicate_source_hints=duplicate_source_hints(library, source, exclude_song_id=clean_id),
     )
     return song
 
@@ -99,6 +101,8 @@ def update_song_metadata(
     *,
     title: str | None = None,
     artist: str | None = None,
+    tags: list[str] | None = None,
+    rating: int | None = None,
 ) -> Song:
     clean_id = normalize_song_id(song_id)
     try:
@@ -107,6 +111,10 @@ def update_song_metadata(
         song = Song(song_id=clean_id)
     song.title = title if title is not None else song.title
     song.artist = artist if artist is not None else song.artist
+    if tags is not None:
+        song.tags = [tag.strip() for tag in tags if tag.strip()]
+    if rating is not None:
+        song.rating = max(1, min(5, int(rating)))
     song.save(library.song_json(clean_id))
     return song
 
@@ -166,6 +174,7 @@ def save_lyrics_text(library: LibraryPaths, song_id: str, lyrics_text: str, *, c
     path = library.lyrics_txt(clean_id)
     text = normalize_lyrics_text(lyrics_text) if clean else lyrics_text.rstrip()
     path.write_text(text + "\n", encoding="utf-8")
+    _archive_lyrics_version(library, clean_id, text, suffix=".txt")
     alignment = lrc_text_to_alignment(lyrics_text) if clean else {"lines": []}
     if alignment.get("lines"):
         write_json(library.alignment_json(clean_id), alignment)
@@ -188,16 +197,43 @@ def save_lyrics_file(library: LibraryPaths, song_id: str, source_path: Path) -> 
     text, encoding, warnings = decode_lyrics_bytes(data)
     original = library.original_lyrics_file(clean_id, source_path.suffix or ".txt")
     original.write_bytes(data)
-    path = save_lyrics_text(library, clean_id, text)
+    _archive_lyrics_version(library, clean_id, text, suffix=source_path.suffix or ".txt")
+    timed_alignment = timed_text_to_alignment(text, source_path.suffix or ".txt")
+    if timed_alignment and timed_alignment.get("lines"):
+        path = save_lyrics_text(library, clean_id, alignment_to_plain_text(timed_alignment), clean=False)
+        write_json(library.alignment_json(clean_id), timed_alignment)
+        library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
+        library.lyrics_ass(clean_id).write_text(build_ass(timed_alignment, title=clean_id), encoding="utf-8")
+    else:
+        path = save_lyrics_text(library, clean_id, text)
     report = read_json(library.report_json(clean_id), default={}) or {}
     report["lyrics_import"] = {
         "source": str(source_path),
         "original_copy": str(original),
         "encoding": encoding,
         "warnings": warnings,
+        "timed_backend": timed_alignment.get("backend") if timed_alignment else None,
     }
     write_json(library.report_json(clean_id), report)
     return path
+
+
+def import_inbox(library: LibraryPaths, pipeline: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
+    library.inbox_dir.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    processed = 0
+    for path in sorted(item for item in library.inbox_dir.iterdir() if item.is_file()):
+        if limit is not None and processed >= limit:
+            break
+        if path.name.startswith("."):
+            continue
+        try:
+            song = pipeline.import_source(str(path))
+            results.append({"source": str(path), "song_id": song.song_id, "imported": True})
+        except Exception as exc:
+            results.append({"source": str(path), "error": str(exc)})
+        processed += 1
+    return results
 
 
 def decode_lyrics_bytes(data: bytes) -> tuple[str, str, list[str]]:
@@ -245,6 +281,26 @@ def duplicate_sources(library: LibraryPaths, source: Path, *, exclude_song_id: s
     return duplicates
 
 
+def duplicate_source_hints(library: LibraryPaths, source: Path, *, exclude_song_id: str | None = None) -> list[dict[str, str]]:
+    source_size = source.stat().st_size
+    source_suffix = source.suffix.lower()
+    exclude = normalize_song_id(exclude_song_id) if exclude_song_id else None
+    hints: list[dict[str, str]] = []
+    for song_id in library.list_song_ids():
+        if exclude and normalize_song_id(song_id) == exclude:
+            continue
+        for candidate in library.source_candidates(song_id):
+            try:
+                candidate_size = candidate.stat().st_size
+            except OSError:
+                continue
+            size_gap = abs(candidate_size - source_size)
+            tolerance = max(1024 * 1024, int(source_size * 0.01))
+            if candidate.suffix.lower() == source_suffix and size_gap <= tolerance:
+                hints.append({"song_id": song_id, "path": str(candidate), "reason": "same extension and similar size"})
+    return hints
+
+
 def delete_song(library: LibraryPaths, song_id: str) -> None:
     clean_id = normalize_song_id(song_id)
     for path in [library.raw_dir(clean_id), library.work_dir(clean_id), library.output_dir(clean_id)]:
@@ -270,7 +326,9 @@ def song_summary(library: LibraryPaths, song_id: str) -> dict[str, Any]:
     summary["has_mix"] = library.mix_wav(song_id).exists()
     summary["has_vocals"] = library.vocals_wav(song_id).exists()
     summary["has_instrumental"] = library.instrumental_wav(song_id).exists()
+    summary["has_instrumental_sample"] = library.instrumental_sample_wav(song_id).exists()
     summary["has_normalized_instrumental"] = library.normalized_instrumental_wav(song_id).exists()
+    summary["has_vocals_sample"] = library.vocals_sample_wav(song_id).exists()
     summary["has_alignment"] = library.alignment_json(song_id).exists()
     summary["has_ass"] = library.lyrics_ass(song_id).exists()
     summary["has_mkv"] = library.final_mkv(song_id).exists()
@@ -278,7 +336,19 @@ def song_summary(library: LibraryPaths, song_id: str) -> dict[str, Any]:
     summary["take_files"] = [
         path.name for path in sorted(library.takes_dir(song_id).glob("*")) if path.is_file() and path.name != "takes.json"
     ]
+    summary["lyrics_versions"] = [
+        path.name for path in sorted(library.lyrics_versions_dir(song_id).glob("*")) if path.is_file()
+    ]
     summary["track_previews"] = [
         path.name for path in sorted(library.previews_dir(song_id).glob("track-*.wav")) if path.is_file()
     ]
     return summary
+
+
+def _archive_lyrics_version(library: LibraryPaths, song_id: str, text: str, *, suffix: str) -> Path:
+    stamp = utc_now().replace("+00:00", "Z").replace(":", "").replace("-", "")
+    clean_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    target = library.lyrics_versions_dir(song_id) / f"lyrics.{stamp}{clean_suffix}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text.rstrip() + "\n", encoding="utf-8")
+    return target

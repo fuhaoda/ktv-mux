@@ -59,7 +59,23 @@ def test_separation_quality_report_compares_stems(tmp_path):
     assert report["instrumental"]["exists"] is True
     assert report["instrumental_rms_delta_db"] < 0
     assert report["vocals_rms_delta_db"] < report["instrumental_rms_delta_db"]
+    assert report["vocal_bleed_risk"] in {"low", "medium", "high"}
     assert report["recommendations"]
+    assert report["recommendations_zh"]
+
+
+def test_quality_report_flags_high_residual_vocal_risk(tmp_path):
+    mix = tmp_path / "mix.wav"
+    instrumental = tmp_path / "instrumental.wav"
+    vocals = tmp_path / "vocals.wav"
+    write_wav(mix, 1000)
+    write_wav(instrumental, 900)
+    write_wav(vocals, 900)
+
+    report = separation_quality_report(mix_wav=mix, instrumental_wav=instrumental, vocals_wav=vocals)
+
+    assert report["vocal_bleed_risk"] == "high"
+    assert any("residual vocal" in item.lower() for item in report["recommendations"])
 
 
 def test_quality_report_warns_on_duration_mismatch(tmp_path):

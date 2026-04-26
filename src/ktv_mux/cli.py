@@ -12,11 +12,13 @@ from .errors import KtvError
 from .exporter import export_song_package
 from .jobs import LocalJobRunner
 from .jsonio import read_json
-from .library import delete_song, rename_song, song_summary, update_song_metadata
+from .library import delete_song, import_inbox, rename_song, song_summary, update_song_metadata
 from .paths import LibraryPaths
 from .pipeline import Pipeline
 from .planner import next_actions
+from .separation_presets import PRESETS
 from .settings import load_settings, save_settings
+from .storage import library_storage_report, song_storage_report
 from .versions import delete_take, list_takes, set_current_take, update_take
 
 
@@ -38,6 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     metadata_p.add_argument("song_id")
     metadata_p.add_argument("--title")
     metadata_p.add_argument("--artist")
+    metadata_p.add_argument("--tags", help="comma-separated tags")
+    metadata_p.add_argument("--rating", type=int, choices=range(1, 6))
 
     rename_p = sub.add_parser("rename", help="rename a song id and move its library folders")
     rename_p.add_argument("old_song_id")
@@ -74,8 +78,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     separate_p = sub.add_parser("separate", help="separate vocals from accompaniment")
     separate_p.add_argument("song_id")
-    separate_p.add_argument("--model", default="htdemucs")
+    separate_p.add_argument("--preset", default="balanced", choices=sorted(PRESETS))
+    separate_p.add_argument("--model")
     separate_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+
+    sample_p = sub.add_parser("separate-sample", help="separate a short segment before running the full song")
+    sample_p.add_argument("song_id")
+    sample_p.add_argument("--audio-index", type=int, default=0)
+    sample_p.add_argument("--start", type=float, default=0.0)
+    sample_p.add_argument("--duration", type=float, default=30.0)
+    sample_p.add_argument("--preset", default="fast-review", choices=sorted(PRESETS))
+    sample_p.add_argument("--model")
+    sample_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+
+    set_instrumental_p = sub.add_parser("set-instrumental", help="use an existing WAV/AIFF/MP3 file as instrumental.wav")
+    set_instrumental_p.add_argument("song_id")
+    set_instrumental_p.add_argument("audio_path")
+    set_instrumental_p.add_argument("--label", default="external instrumental")
 
     normalize_p = sub.add_parser("normalize", help="create a loudness-normalized instrumental WAV")
     normalize_p.add_argument("song_id")
@@ -130,6 +149,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replace_p.add_argument("--duration-limit", type=float, default=None, help="mux only the first N seconds")
 
+    remake_p = sub.add_parser("remake-track", help="extract one source track, remake accompaniment, and replace audio")
+    remake_p.add_argument("song_id")
+    remake_p.add_argument("--audio-index", type=int, default=0, help="source audio track to separate")
+    remake_p.add_argument("--keep-audio-index", type=int, default=0, help="source audio track to keep in the new MKV")
+    remake_p.add_argument("--preset", default="balanced", choices=sorted(PRESETS))
+    remake_p.add_argument("--model")
+    remake_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+    remake_p.add_argument("--no-copy-subtitles", action="store_true")
+    remake_p.add_argument("--duration-limit", type=float, default=None)
+
+    extract_subs_p = sub.add_parser("extract-subtitles", help="extract an embedded subtitle track into lyrics.txt/ASS")
+    extract_subs_p.add_argument("song_id")
+    extract_subs_p.add_argument("--subtitle-index", type=int, default=0)
+
+    lyrics_versions_p = sub.add_parser("lyrics-versions", help="list saved lyrics revisions")
+    lyrics_versions_p.add_argument("song_id")
+
     clean_p = sub.add_parser("clean-work", help="remove regenerable work files for one song")
     clean_p.add_argument("song_id")
 
@@ -141,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     take_note_p.add_argument("filename")
     take_note_p.add_argument("--label", default="")
     take_note_p.add_argument("--note", default="")
+    take_note_p.add_argument("--score", type=int)
 
     take_current_p = sub.add_parser("take-current", help="promote a saved take to the stable output filename")
     take_current_p.add_argument("song_id")
@@ -156,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
     export_p.add_argument("--no-mkv", action="store_true")
     export_p.add_argument("--no-takes", action="store_true")
     export_p.add_argument("--include-logs", action="store_true")
+
+    inbox_p = sub.add_parser("inbox-scan", help="import media files from library/inbox")
+    inbox_p.add_argument("--limit", type=int)
+
+    storage_p = sub.add_parser("storage", help="show disk usage for the library or one song")
+    storage_p.add_argument("song_id", nargs="?")
 
     jobs_p = sub.add_parser("jobs", help="list local Web jobs")
     jobs_p.add_argument("--limit", type=int, default=25)
@@ -173,6 +216,16 @@ def build_parser() -> argparse.ArgumentParser:
     settings_p.add_argument("--demucs-device", choices=["auto", "cpu", "mps", "cuda"])
     settings_p.add_argument("--normalize-target-i", type=float)
     settings_p.add_argument("--auto-refresh-seconds", type=int)
+    settings_p.add_argument("--default-audio-order", choices=["instrumental-first", "original-first"])
+    settings_p.add_argument("--default-duration-limit", type=float)
+    settings_p.add_argument("--output-template")
+    settings_p.add_argument("--package-include-logs", action="store_true")
+    settings_p.add_argument("--subtitle-font-size", type=int)
+    settings_p.add_argument("--subtitle-margin-v", type=int)
+    settings_p.add_argument("--subtitle-primary-colour")
+    settings_p.add_argument("--subtitle-secondary-colour")
+    settings_p.add_argument("--instrumental-track-title")
+    settings_p.add_argument("--original-track-title")
 
     delete_p = sub.add_parser("delete", help="delete raw/work/output folders for one song")
     delete_p.add_argument("song_id")
@@ -203,6 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch_stage_p.add_argument("--count", type=int, default=1)
     batch_stage_p.add_argument("--spacing", type=float, default=45.0)
     batch_stage_p.add_argument("--preset", default="manual", choices=["manual", "chorus"])
+    batch_stage_p.add_argument("--separation-preset", default="balanced", choices=sorted(PRESETS))
     batch_stage_p.add_argument("--model", default="htdemucs")
     batch_stage_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
     batch_stage_p.add_argument("--limit", type=int)
@@ -248,7 +302,8 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
     if args.command == "import-many":
         return [pipeline.import_source(source) for source in args.sources]
     if args.command == "metadata":
-        return update_song_metadata(library, args.song_id, title=args.title, artist=args.artist)
+        tags = [tag.strip() for tag in args.tags.split(",")] if args.tags is not None else None
+        return update_song_metadata(library, args.song_id, title=args.title, artist=args.artist, tags=tags, rating=args.rating)
     if args.command == "rename":
         return rename_song(library, args.old_song_id, args.new_song_id)
     if args.command == "lyrics":
@@ -277,7 +332,20 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
             preset=args.preset,
         )
     if args.command == "separate":
-        return pipeline.separate(args.song_id, model=args.model, device=args.device)
+        return pipeline.separate(args.song_id, preset=args.preset, model=args.model, device=args.device)
+    if args.command == "separate-sample":
+        return pipeline.separate_sample(
+            args.song_id,
+            audio_index=args.audio_index,
+            start=args.start,
+            duration=args.duration,
+            preset=args.preset,
+            separation_preset=args.separation_preset,
+            model=args.model,
+            device=args.device,
+        )
+    if args.command == "set-instrumental":
+        return {"instrumental_wav": str(pipeline.set_instrumental(args.song_id, Path(args.audio_path), label=args.label))}
     if args.command == "normalize":
         return {
             "normalized_wav": str(
@@ -326,12 +394,31 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
                 )
             )
         }
+    if args.command == "remake-track":
+        return pipeline.remake_track(
+            args.song_id,
+            audio_index=args.audio_index,
+            keep_audio_index=args.keep_audio_index,
+            preset=args.preset,
+            model=args.model,
+            device=args.device,
+            copy_subtitles=not args.no_copy_subtitles,
+            duration_limit=args.duration_limit,
+        )
+    if args.command == "extract-subtitles":
+        return {"lyrics_path": str(pipeline.extract_embedded_subtitles(args.song_id, subtitle_index=args.subtitle_index))}
+    if args.command == "lyrics-versions":
+        return [
+            {"filename": path.name, "path": str(path)}
+            for path in sorted(library.lyrics_versions_dir(args.song_id).glob("*"))
+            if path.is_file()
+        ]
     if args.command == "clean-work":
         return pipeline.clean_work(args.song_id)
     if args.command == "takes":
         return list_takes(library, args.song_id)
     if args.command == "take-note":
-        update_take(library, args.song_id, args.filename, label=args.label, note=args.note)
+        update_take(library, args.song_id, args.filename, label=args.label, note=args.note, score=args.score)
         return {"updated": args.filename}
     if args.command == "take-current":
         return {"current": str(set_current_take(library, args.song_id, args.filename))}
@@ -351,6 +438,12 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
                 )
             )
         }
+    if args.command == "inbox-scan":
+        return import_inbox(library, pipeline, limit=args.limit)
+    if args.command == "storage":
+        if args.song_id:
+            return song_storage_report(library, args.song_id)
+        return library_storage_report(library)
     if args.command == "jobs":
         runner = LocalJobRunner(library, pipeline)
         return [job.to_dict() for job in runner.list_jobs(limit=args.limit)]
@@ -369,6 +462,16 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
             "demucs_device": args.demucs_device,
             "normalize_target_i": args.normalize_target_i,
             "auto_refresh_seconds": args.auto_refresh_seconds,
+            "default_audio_order": args.default_audio_order,
+            "default_duration_limit": args.default_duration_limit,
+            "output_template": args.output_template,
+            "package_include_logs": True if args.package_include_logs else None,
+            "subtitle_font_size": args.subtitle_font_size,
+            "subtitle_margin_v": args.subtitle_margin_v,
+            "subtitle_primary_colour": args.subtitle_primary_colour,
+            "subtitle_secondary_colour": args.subtitle_secondary_colour,
+            "instrumental_track_title": args.instrumental_track_title,
+            "original_track_title": args.original_track_title,
         }
         if any(value is not None for value in updates.values()):
             return save_settings(library, updates)

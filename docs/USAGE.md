@@ -1,5 +1,7 @@
 # Usage
 
+For the shortest scenario-based guide, see [Start Here / 快速开始](START_HERE.md).
+
 ## Start The App
 
 One-click macOS:
@@ -26,6 +28,8 @@ python3.12 -m venv .venv
 ```
 
 Open `http://127.0.0.1:8000`.
+
+If `8000` already has ktv-mux running, `scripts/ktv-start.command` opens it. If another process owns `8000`, it tries `8001` through `8010`.
 
 ## Fast Test With The Bundled MKV
 

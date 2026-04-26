@@ -20,12 +20,17 @@ class Song:
     artist: str | None = None
     source_path: str | None = None
     lyrics_path: str | None = None
+    tags: list[str] = field(default_factory=list)
+    rating: int | None = None
     status: str = "new"
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
         self.song_id = normalize_song_id(self.song_id)
+        self.tags = [str(tag).strip() for tag in self.tags if str(tag).strip()]
+        if self.rating is not None:
+            self.rating = max(1, min(5, int(self.rating)))
 
     @classmethod
     def from_json(cls, path: Path) -> Song:
@@ -63,4 +68,3 @@ def append_stage_status(status_path: Path, stage: str, state: str, message: str 
     data["message"] = message
     data["updated_at"] = utc_now()
     write_json(status_path, data)
-

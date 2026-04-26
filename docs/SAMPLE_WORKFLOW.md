@@ -2,6 +2,8 @@
 
 This is the shortest repeatable check from `assets/朋友-周华健.mkv` to a playable KTV-style MKV.
 
+For a scenario-oriented Chinese/English guide, see [Start Here / 快速开始](START_HERE.md).
+
 ## 1. Start
 
 ```bash
@@ -49,6 +51,12 @@ library/output/朋友-周华健/instrumental.wav
 ```
 
 If the level is wrong, use `Normalize` and compare `instrumental.normalized.wav`.
+
+If you do not want to wait for the full song yet, run `Sample Separate` first. It creates:
+
+```text
+library/output/朋友-周华健/instrumental.sample.wav
+```
 
 ## 5. Add Lyrics
 

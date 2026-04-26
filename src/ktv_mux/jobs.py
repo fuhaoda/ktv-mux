@@ -122,6 +122,10 @@ class LocalJobRunner:
         jobs.sort(key=lambda job: job.created_at, reverse=True)
         return jobs[:limit]
 
+    def get_job(self, job_id: str) -> Job | None:
+        job = self._load(job_id)
+        return self._with_progress(job) if job else None
+
     def prune_jobs(self, *, states: set[str] | None = None) -> int:
         removable = states or {"completed", "failed", "canceled"}
         removed = 0
@@ -242,8 +246,38 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
     elif job.stage == "separate":
         pipeline.separate(
             job.song_id,
-            model=str(params.get("model", "htdemucs")),
+            preset=str(params.get("separation_preset", params.get("preset", "balanced"))),
+            model=params.get("model"),
             device=params.get("device"),
+            cancel_file=cancel_file,
+        )
+    elif job.stage == "separate-sample":
+        pipeline.separate_sample(
+            job.song_id,
+            audio_index=int(params.get("audio_index", 0)),
+            start=float(params.get("start", 0.0)),
+            duration=float(params.get("duration", 30.0)),
+            preset=str(params.get("separation_preset", params.get("preset", "fast-review"))),
+            model=params.get("model"),
+            device=params.get("device"),
+            cancel_file=cancel_file,
+        )
+    elif job.stage == "remake-track":
+        pipeline.remake_track(
+            job.song_id,
+            audio_index=int(params.get("audio_index", 0)),
+            keep_audio_index=int(params.get("keep_audio_index", 0)),
+            preset=str(params.get("separation_preset", params.get("preset", "balanced"))),
+            model=params.get("model"),
+            device=params.get("device"),
+            copy_subtitles=bool(params.get("copy_subtitles", True)),
+            duration_limit=_float_or_none(params.get("duration_limit")),
+            cancel_file=cancel_file,
+        )
+    elif job.stage == "extract-subtitles":
+        pipeline.extract_embedded_subtitles(
+            job.song_id,
+            subtitle_index=int(params.get("subtitle_index", 0)),
             cancel_file=cancel_file,
         )
     elif job.stage == "align":
@@ -299,7 +333,7 @@ def run_pipeline_stage(pipeline: Pipeline, job: Job, *, cancel_file: Any | None 
             start_stage=str(params.get("start_stage", "probe")),
             align_backend=str(params.get("align_backend", "auto")),
             audio_index=int(params.get("audio_index", 0)),
-            model=str(params.get("model", "htdemucs")),
+            model=params.get("model"),
             device=params.get("device"),
             duration_limit=_float_or_none(params.get("duration_limit")),
             cancel_file=cancel_file,

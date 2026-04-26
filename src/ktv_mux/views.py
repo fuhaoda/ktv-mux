@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import quote
 
 from .paths import normalize_song_id
+from .separation_presets import PRESETS
 
 _BASE_TEMPLATE = Path(__file__).with_name("templates") / "base.html"
 
@@ -21,7 +22,15 @@ def page(title: str, body: str, *, auto_refresh: bool = False, refresh_seconds: 
     )
 
 
-def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str:
+def render_index(
+    songs: list[dict[str, Any]],
+    jobs: list[dict[str, Any]],
+    *,
+    query: str = "",
+    file_filter: str = "",
+    inbox_files: list[str] | None = None,
+    storage: dict[str, Any] | None = None,
+) -> str:
     songs = sorted(songs, key=lambda song: str(song.get("updated_at") or song.get("created_at") or ""), reverse=True)
     rows = "\n".join(
         f"<tr><td><a class='song-link' href='{song_url(song['song_id'])}'>{escape(song['song_id'])}</a></td>"
@@ -39,9 +48,24 @@ def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str
     <h1>Songs</h1>
     <div class="subtle">Import videos, choose tracks, generate instrumentals, and build MKV outputs.</div>
   </div>
+  <div class="row">
+    <a class="button secondary" href="/wizard">First Run Wizard</a>
+    <form method="post" action="/sample/import"><button class="secondary" type="submit">Import Bundled Sample</button></form>
+  </div>
+</section>
+<section class="panel module-launcher">
+  <h2>Single Module Launcher</h2>
+  <div class="module-grid">
+    <a class="module-card" href="#import">Import</a>
+    <a class="module-card" href="#tracks">Track Review</a>
+    <a class="module-card" href="#audio">Generate Instrumental</a>
+    <a class="module-card" href="#lyrics">Subtitle Workbench</a>
+    <a class="module-card" href="#mux">Replace / Mux</a>
+    <a class="module-card" href="#jobs">Jobs</a>
+  </div>
 </section>
 <section class="grid-2">
-  <div class="panel">
+  <div class="panel" id="import">
     <h2>Choose File</h2>
     <form method="post" action="/import-upload" enctype="multipart/form-data" class="stack drop-zone">
       <div class="field-wide"><label>Source files</label><input name="files" type="file" multiple required></div>
@@ -57,6 +81,7 @@ def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str
     <h2>Import Path Or URL</h2>
     <form method="post" action="/import" class="stack">
       <div><label>Local path or URL</label><input name="source" required placeholder="assets/朋友-周华健.mkv"></div>
+      <label class="checkbox-line"><input name="rights" value="1" type="checkbox" required> 我确认自己有权处理这个本地文件或 URL，仅用于个人本地制作。</label>
       <div class="fields">
         <div><label>Song ID optional</label><input name="song_id" placeholder="defaults to filename or URL"></div>
         <div><label>Artist optional</label><input name="artist"></div>
@@ -64,6 +89,43 @@ def render_index(songs: list[dict[str, Any]], jobs: list[dict[str, Any]]) -> str
       </div>
       <div><button type="submit">Import</button></div>
     </form>
+  </div>
+</section>
+<section class="grid-2" style="margin-top:16px;">
+  <div class="panel">
+    <h2>Search & Filter</h2>
+    <form method="get" action="/" class="row">
+      <input name="q" value="{escape(query)}" placeholder="song id, title, or artist">
+      <select name="file_filter">{render_select_options(["", "source", "lyrics", "instrumental", "ktv-mkv"], file_filter)}</select>
+      <button class="secondary" type="submit">Filter</button>
+      <a class="button secondary" href="/">Reset</a>
+    </form>
+  </div>
+  <div class="panel">
+    <h2>Batch Console</h2>
+    <form method="post" action="/batch-stage" class="row">
+      <select name="stage">{render_select_options(["probe", "preview-tracks", "extract", "separate", "separate-sample"], "probe")}</select>
+      <input class="number-input" name="audio_index" type="number" min="0" value="0" title="zero-based audio index">
+      <select name="separation_preset">{render_select_options(sorted(PRESETS), "balanced")}</select>
+      <input class="number-input" name="limit" type="number" min="1" placeholder="limit">
+      <label class="checkbox-line"><input name="skip_completed" value="1" type="checkbox"> Skip completed</label>
+      <label class="checkbox-line"><input name="dry_run" value="1" type="checkbox"> Dry run</label>
+      <label class="checkbox-line"><input name="stop_on_error" value="1" type="checkbox"> Stop after first submit</label>
+      <button class="secondary" type="submit">Queue Batch</button>
+    </form>
+  </div>
+</section>
+<section class="grid-2" style="margin-top:16px;">
+  <div class="panel">
+    <h2>Inbox Auto-Import</h2>
+    <div class="subtle">Drop media files into library/inbox, then scan to import them with filename-based song IDs.</div>
+    <div class="compact">{escape(', '.join(inbox_files or []) or 'No inbox files waiting.')}</div>
+    <form method="post" action="/inbox-scan" class="row" style="margin-top:10px;"><button class="secondary" type="submit">Scan Inbox</button></form>
+  </div>
+  <div class="panel">
+    <h2>Storage</h2>
+    <div class="subtle">Library size: {escape(str((storage or {}).get("total") or "0 B"))}</div>
+    <a class="button secondary" href="/storage">Open Disk Manager</a>
   </div>
 </section>
 <section class="panel" style="margin-top:16px;">
@@ -134,6 +196,8 @@ def render_detail(
     demucs_model = str(settings.get("demucs_model") or "htdemucs")
     demucs_device = str(settings.get("demucs_device") or "auto")
     normalize_target_i = fmt_attr(settings.get("normalize_target_i"))
+    default_audio_order = str(settings.get("default_audio_order") or "instrumental-first")
+    default_duration_limit = fmt_attr(settings.get("default_duration_limit"))
     return f"""
 <section class="hero">
   <div>
@@ -143,9 +207,18 @@ def render_detail(
   <div class="row">{render_flags(summary)} <span class="badge {state_class}">{escape(state)}</span> <span class="badge">{escape(current_stage)}</span></div>
 </section>
 {render_duplicate_warning(report)}
+{render_failure_recovery(song_id, report)}
+<nav class="workflow-tabs">
+  <a href="#tracks">Tracks</a>
+  <a href="#audio">Audio</a>
+  <a href="#lyrics">Lyrics</a>
+  <a href="#mux">Mux</a>
+  <a href="#outputs">Outputs</a>
+  <a href="#jobs">Jobs</a>
+</nav>
 <section class="grid-2">
   <div class="stack">
-    <div class="panel">
+    <div class="panel" id="audio">
       <h2>Workflow</h2>
       <div class="steps">
         <form class="step" method="post" action="{song_url(song_id)}/run/probe">
@@ -173,19 +246,44 @@ def render_detail(
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/separate">
           <strong>Separate</strong>
+          <label>Preset</label>
+          <select name="separation_preset">{render_select_options(sorted(PRESETS), "balanced")}</select>
           <label>Model</label>
-          <input name="model" value="{escape(demucs_model)}">
+          <input name="model" placeholder="{escape(demucs_model)}">
           <label>Device</label>
           <select name="device">{render_select_options(["auto", "mps", "cpu", "cuda"], demucs_device)}</select>
           <button type="submit">Make Stem</button>
+        </form>
+        <form class="step" method="post" action="{song_url(song_id)}/run/separate-sample">
+          <strong>Sample Separate</strong>
+          <label>Source track</label>
+          <select name="audio_index">{render_audio_options(report, selected_index)}</select>
+          <label>Start / Duration</label>
+          <input name="preview_start" type="number" step="1" min="0" value="{preview_start}">
+          <input name="preview_duration" type="number" step="1" min="3" value="30">
+          <label>Preset</label>
+          <select name="separation_preset">{render_select_options(sorted(PRESETS), "fast-review")}</select>
+          <button type="submit">Try Segment</button>
         </form>
         <form class="step" method="post" action="{song_url(song_id)}/run/replace-audio">
           <strong>Replace Track 2</strong>
           <label>Keep original track</label>
           <select name="keep_audio_index">{render_audio_options(report, keep_audio_index)}</select>
+          <label class="checkbox-line"><input name="copy_subtitles" value="1" type="checkbox" checked> Copy source subtitles</label>
           <label>Limit seconds optional</label>
           <input name="duration_limit" type="number" step="1" min="1">
           <button type="submit">Build MKV</button>
+        </form>
+        <form class="step" method="post" action="{song_url(song_id)}/run/remake-track">
+          <strong>Remake Track</strong>
+          <label>Separate track</label>
+          <select name="audio_index">{render_audio_options(report, selected_index)}</select>
+          <label>Keep original track</label>
+          <select name="keep_audio_index">{render_audio_options(report, keep_audio_index)}</select>
+          <label>Preset</label>
+          <select name="separation_preset">{render_select_options(sorted(PRESETS), "balanced")}</select>
+          <label class="checkbox-line"><input name="copy_subtitles" value="1" type="checkbox" checked> Copy subtitles</label>
+          <button type="submit">Remake + Replace</button>
         </form>
       </div>
       <div class="row" style="margin-top:12px;">
@@ -202,7 +300,7 @@ def render_detail(
         </form>
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" id="tracks">
       <h2>Source Tracks</h2>
       {render_track_panel(song_id, report)}
     </div>
@@ -211,15 +309,31 @@ def render_detail(
       {audio_blocks}
     </div>
     <div class="panel">
-      <h2>Lyrics</h2>
+      <h2>A/B Review</h2>
+      {render_ab_review(song_id, summary, takes)}
+    </div>
+    <div class="panel" id="lyrics">
+      <h2>Subtitle Workbench</h2>
       <form method="post" action="{song_url(song_id)}/lyrics" class="stack">
         <textarea name="lyrics" data-draft-key="{escape(song_id)}:lyrics">{escape(lyrics)}</textarea>
         <div class="row"><button type="submit">Save Lyrics</button></div>
       </form>
       <form method="post" action="{song_url(song_id)}/lyrics-file" enctype="multipart/form-data" class="row" style="margin-top:10px;">
-        <input name="file" type="file" accept=".txt,text/plain" required>
-        <button class="secondary" type="submit">Upload lyrics.txt</button>
+        <input name="file" type="file" accept=".txt,.lrc,.srt,.ass,text/plain" required>
+        <button class="secondary" type="submit">Upload lyrics file</button>
       </form>
+      <div class="row" style="margin-top:10px;">
+        <form method="post" action="{song_url(song_id)}/run/extract-subtitles" class="row">
+          <input class="number-input" name="subtitle_index" type="number" min="0" value="0">
+          <button class="secondary" type="submit">Extract Embedded Subtitles</button>
+        </form>
+        <form method="post" action="{song_url(song_id)}/instrumental-file" enctype="multipart/form-data" class="row">
+          <input name="file" type="file" accept="audio/*,.wav,.aiff,.flac,.mp3" required>
+          <input name="label" placeholder="candidate label">
+          <button class="secondary" type="submit">Use External Instrumental</button>
+        </form>
+      </div>
+      {render_lyrics_versions(summary)}
       <div class="row" style="margin-top:12px;">
         <form method="post" action="{song_url(song_id)}/run/align" class="row">
           <select name="align_backend">{render_select_options(["auto", "lrc", "funasr", "simple"], "auto")}</select>
@@ -229,9 +343,9 @@ def render_detail(
           <input class="number-input" name="seconds" type="number" step="0.05" value="0">
           <button class="secondary" type="submit">Shift ASS</button>
         </form>
-        <form method="post" action="{song_url(song_id)}/run/mux">
-          <input type="hidden" name="audio_order" value="instrumental-first">
-          <input class="number-input" name="duration_limit" type="number" step="1" min="1" placeholder="seconds">
+        <form method="post" action="{song_url(song_id)}/run/mux" id="mux">
+          <select name="audio_order">{render_select_options(["instrumental-first", "original-first"], default_audio_order)}</select>
+          <input class="number-input" name="duration_limit" type="number" step="1" min="0" value="{default_duration_limit}" placeholder="seconds">
           <button class="secondary" type="submit">Build KTV MKV</button>
         </form>
       </div>
@@ -247,13 +361,17 @@ def render_detail(
       <h2>Metadata</h2>
       {render_metadata_form(song_id, summary)}
     </div>
-    <div class="panel">
+    <div class="panel" id="outputs">
       <h2>Outputs</h2>
       {output_blocks}
     </div>
     <div class="panel">
       <h2>Quality</h2>
       {render_quality(report)}
+    </div>
+    <div class="panel">
+      <h2>Player Compatibility</h2>
+      {render_compatibility(report)}
     </div>
     <div class="panel">
       <h2>Status</h2>
@@ -263,7 +381,7 @@ def render_detail(
       <h2>Diagnostics</h2>
       {render_doctor_summary(doctor)}
     </div>
-    <div class="panel">
+    <div class="panel" id="jobs">
       <h2>Recent Jobs</h2>
       {render_jobs(jobs)}
     </div>
@@ -300,8 +418,10 @@ def render_audio_blocks(song_id: str, summary: dict[str, Any]) -> str:
     for key, title, kind in [
         ("has_mix", "Extracted Mix", "mix"),
         ("has_instrumental", "Instrumental", "instrumental"),
+        ("has_instrumental_sample", "Sample Instrumental", "instrumental-sample"),
         ("has_normalized_instrumental", "Normalized Instrumental", "instrumental-normalized"),
         ("has_vocals", "Vocals Stem", "vocals"),
+        ("has_vocals_sample", "Sample Vocals", "vocals-sample"),
     ]:
         if summary.get(key):
             blocks.append(
@@ -315,7 +435,8 @@ def render_audio_blocks(song_id: str, summary: dict[str, Any]) -> str:
 
 def render_duplicate_warning(report: dict[str, Any]) -> str:
     duplicates = report.get("duplicate_sources") or []
-    if not duplicates:
+    hints = report.get("duplicate_source_hints") or []
+    if not duplicates and not hints:
         return ""
     rows = "".join(
         f"<div><a href='{song_url(str(item.get('song_id') or ''))}'>{escape(str(item.get('song_id') or ''))}</a>"
@@ -323,7 +444,75 @@ def render_duplicate_warning(report: dict[str, Any]) -> str:
         for item in duplicates
         if isinstance(item, dict)
     )
-    return f"<section class='panel warning-panel' style='margin-bottom:16px;'><h2>Possible Duplicate Source</h2><div class='tight'>{rows}</div></section>"
+    hint_rows = "".join(
+        f"<div><a href='{song_url(str(item.get('song_id') or ''))}'>{escape(str(item.get('song_id') or ''))}</a>"
+        f"<span class='badge warn'>{escape(str(item.get('reason') or 'similar file'))}</span>"
+        f"<div class='path'>{escape(str(item.get('path') or ''))}</div></div>"
+        for item in hints
+        if isinstance(item, dict)
+    )
+    return f"<section class='panel warning-panel' style='margin-bottom:16px;'><h2>Possible Duplicate Source</h2><div class='tight'>{rows}{hint_rows}</div></section>"
+
+
+def render_failure_recovery(song_id: str, report: dict[str, Any]) -> str:
+    failed_stage = str((report or {}).get("failed_stage") or "")
+    failure = str((report or {}).get("failure") or "")
+    if not failed_stage and not failure:
+        return ""
+    start_stage = failed_stage if failed_stage in {"probe", "extract", "separate", "align", "mux"} else "probe"
+    rerun_button = ""
+    if failed_stage in {"probe", "preview-tracks", "extract", "separate", "separate-sample", "align", "mux", "replace-audio", "normalize"}:
+        rerun_button = (
+            f"<form method='post' action='{song_url(song_id)}/run/{escape(failed_stage)}'>"
+            "<input type='hidden' name='force' value='1'>"
+            "<button class='secondary' type='submit'>Force Rerun Failed Stage</button></form>"
+        )
+    return f"""
+<section class="panel warning-panel" style="margin-bottom:16px;">
+  <h2>Failure Recovery</h2>
+  <div class="badge bad">{escape(failed_stage or 'failed')}</div>
+  <div class="compact">{escape(trim(failure, 500))}</div>
+  <div class="row" style="margin-top:10px;">
+    {rerun_button}
+    <form method="post" action="{song_url(song_id)}/run/separate">
+      <input type="hidden" name="device" value="cpu">
+      <button class="secondary" type="submit">Retry Separate On CPU</button>
+    </form>
+    <form method="post" action="{song_url(song_id)}/run/separate-sample">
+      <button class="secondary" type="submit">Test Short Segment</button>
+    </form>
+    <form method="post" action="{song_url(song_id)}/run/process-from">
+      <input type="hidden" name="start_stage" value="{escape(start_stage)}">
+      <button class="secondary" type="submit">Run From Failed Stage</button>
+    </form>
+  </div>
+</section>
+"""
+
+
+def render_ab_review(song_id: str, summary: dict[str, Any], takes: list[dict[str, Any]]) -> str:
+    rows = []
+    if summary.get("has_mix"):
+        rows.append(f"<div><strong>A Original Mix</strong><audio controls src='{song_url(song_id)}/audio/mix'></audio></div>")
+    if summary.get("has_instrumental"):
+        rows.append(f"<div><strong>B Current Instrumental</strong><audio controls src='{song_url(song_id)}/audio/instrumental'></audio></div>")
+    instrumental_takes = [take for take in takes if take.get("kind") == "instrumental"][:4]
+    for take in instrumental_takes:
+        filename = str(take.get("filename") or "")
+        encoded = quote(filename, safe="")
+        score_value = "" if take.get("score") is None else str(take.get("score"))
+        rows.append(
+            f"<div class='take-row'><div class='row'><strong>Saved Instrumental Take</strong><span class='badge'>{escape(score_value or 'unscored')}</span></div>"
+            f"<audio controls src='{song_url(song_id)}/download/take/{encoded}'></audio>"
+            f"<form method='post' action='{song_url(song_id)}/take/{encoded}/update' class='row'>"
+            f"<input name='label' value='{escape(str(take.get('label') or ''))}' placeholder='label'>"
+            f"<input name='note' value='{escape(str(take.get('note') or ''))}' placeholder='listening note'>"
+            f"<input class='number-input' name='score' type='number' min='1' max='5' value='{escape(score_value)}' placeholder='1-5'>"
+            "<button class='secondary' type='submit'>Save Review</button></form></div>"
+        )
+    if not rows:
+        return "<div class='empty'>Generate mix and instrumental audio to compare takes.</div>"
+    return "<div class='tight'>" + "".join(rows) + "</div>"
 
 
 def render_next_actions(song_id: str, actions: list[dict[str, Any]]) -> str:
@@ -344,10 +533,14 @@ def render_next_actions(song_id: str, actions: list[dict[str, Any]]) -> str:
 
 
 def render_metadata_form(song_id: str, summary: dict[str, Any]) -> str:
+    tags = ", ".join(str(tag) for tag in summary.get("tags") or [])
+    rating = "" if summary.get("rating") is None else str(summary.get("rating"))
     return f"""
 <form method="post" action="{song_url(song_id)}/metadata" class="tight">
   <div><label>Title</label><input name="title" value="{escape(str(summary.get("title") or ""))}"></div>
   <div><label>Artist</label><input name="artist" value="{escape(str(summary.get("artist") or ""))}"></div>
+  <div><label>Tags</label><input name="tags" value="{escape(tags)}" placeholder="duet, needs-review"></div>
+  <div><label>Rating</label><input name="rating" type="number" min="1" max="5" value="{escape(rating)}"></div>
   <div><button class="secondary" type="submit">Save Metadata</button></div>
 </form>
 <form method="post" action="{song_url(song_id)}/rename" class="tight" style="margin-top:10px;">
@@ -379,10 +572,36 @@ def render_track_panel(song_id: str, report: dict[str, Any]) -> str:
             "<div class='track-grid'>"
             f"<div><strong>Track {audio_index + 1}</strong></div>"
             f"<div class='compact'>{escape(details)}</div>"
-            f"<div>{player}</div>"
+            f"<div>{player}<div class='row track-actions'>"
+            f"<form method='post' action='{song_url(song_id)}/run/extract'><input type='hidden' name='audio_index' value='{audio_index}'><button class='secondary' type='submit'>Use Track {audio_index + 1} For Extract</button></form>"
+            f"<form method='post' action='{song_url(song_id)}/run/separate-sample'><input type='hidden' name='audio_index' value='{audio_index}'><button class='secondary' type='submit'>Try Track {audio_index + 1}</button></form>"
+            f"<form method='post' action='{song_url(song_id)}/run/remake-track'><input type='hidden' name='audio_index' value='{audio_index}'><input type='hidden' name='keep_audio_index' value='0'><input type='hidden' name='copy_subtitles' value='1'><button class='secondary' type='submit'>Remake From Track {audio_index + 1}</button></form>"
+            "</div></div>"
             "</div>"
         )
-    return "<div class='tight'>" + "".join(rows) + "</div>"
+    subtitle_panel = render_subtitle_tracks(song_id, report)
+    return "<div class='tight'>" + "".join(rows) + subtitle_panel + "</div>"
+
+
+def render_subtitle_tracks(song_id: str, report: dict[str, Any]) -> str:
+    subtitle_streams = [
+        s for s in (((report or {}).get("probe") or {}).get("streams") or []) if s.get("codec_type") == "subtitle"
+    ]
+    if not subtitle_streams:
+        return ""
+    rows = []
+    for subtitle_index, stream in enumerate(subtitle_streams):
+        details = audio_details(stream)
+        rows.append(
+            "<div class='track-grid'>"
+            f"<div><strong>Subtitle {subtitle_index + 1}</strong></div>"
+            f"<div class='compact'>{escape(details)}</div>"
+            f"<form method='post' action='{song_url(song_id)}/run/extract-subtitles'>"
+            f"<input type='hidden' name='subtitle_index' value='{subtitle_index}'>"
+            f"<button class='secondary' type='submit'>Use As Lyrics</button></form>"
+            "</div>"
+        )
+    return "<h3>Embedded Subtitles</h3>" + "".join(rows)
 
 
 def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
@@ -403,12 +622,15 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
             f"<div><input id='{end_id}' name='line_{index}_end' type='number' step='0.01' value='{fmt_attr(item.get('end'))}'>"
             f"<input type='range' min='0' max='600' step='0.01' value='{fmt_attr(item.get('end'))}' data-sync-target='#{end_id}'></div>"
             f"<input name='line_{index}_text' value='{escape(str(item.get('text') or ''))}'>"
+            f"<button class='secondary icon-button' type='button' data-seek-time='{fmt_attr(item.get('start'))}'>Play</button>"
             "</div>"
         )
     note = "<div class='subtle'>Showing first 24 lines.</div>" if len(lines) > 24 else ""
     return f"""
       <div class="tight" style="margin-top:14px;">
         <h3>Subtitle Timing</h3>
+        <audio class="subtitle-player" data-subtitle-player controls src="{song_url(song_id)}/audio/instrumental"></audio>
+        <div class="row"><button class="secondary" type="button" data-use-playhead>Use Playhead For Focused Time</button><span class="subtle">Click a time input, play audio, then copy the current playhead.</span></div>
         <img class="waveform" data-duration="{fmt_attr(max_time)}" src="{song_url(song_id)}/waveform.svg" alt="Audio waveform">
         <form method="post" action="{song_url(song_id)}/alignment" class="tight">
           <input type="hidden" name="line_count" value="{min(len(lines), 24)}">
@@ -433,6 +655,14 @@ def render_alignment_editor(song_id: str, alignment: dict[str, Any]) -> str:
 """
 
 
+def render_lyrics_versions(summary: dict[str, Any]) -> str:
+    versions = summary.get("lyrics_versions") or []
+    if not versions:
+        return "<div class='subtle' style='margin-top:8px;'>No saved lyrics revisions yet.</div>"
+    rows = "".join(f"<span class='badge'>{escape(str(name))}</span>" for name in versions[-6:])
+    return f"<div class='tight' style='margin-top:8px;'><strong>Lyrics revisions</strong><div class='row'>{rows}</div></div>"
+
+
 def render_outputs(
     song_id: str,
     summary: dict[str, Any],
@@ -441,19 +671,34 @@ def render_outputs(
 ) -> str:
     rows = []
     if summary.get("has_instrumental"):
-        rows.append(output_row("Instrumental WAV", f"{song_url(song_id)}/download/instrumental", "instrumental.wav"))
+        rows.append(output_row("Instrumental WAV", f"{song_url(song_id)}/download/instrumental", "instrumental.wav", song_id=song_id, kind="instrumental"))
+    if summary.get("has_instrumental_sample"):
+        rows.append(
+            output_row(
+                "Sample Instrumental WAV",
+                f"{song_url(song_id)}/download/instrumental-sample",
+                "instrumental.sample.wav",
+                song_id=song_id,
+                kind="instrumental-sample",
+            )
+        )
     if summary.get("has_normalized_instrumental"):
         rows.append(
             output_row(
                 "Normalized Instrumental WAV",
                 f"{song_url(song_id)}/download/instrumental-normalized",
                 "instrumental.normalized.wav",
+                song_id=song_id,
+                kind="instrumental-normalized",
             )
         )
     if summary.get("has_audio_replaced_mkv"):
-        rows.append(output_row("Audio-Replaced MKV", f"{song_url(song_id)}/download/audio-replaced-mkv", "new instrumental as Track 2"))
+        rows.append(output_row("Audio-Replaced MKV", f"{song_url(song_id)}/download/audio-replaced-mkv", "new instrumental as Track 2", song_id=song_id, kind="audio-replaced-mkv", video=True))
     if summary.get("has_mkv"):
-        rows.append(output_row("KTV MKV", f"{song_url(song_id)}/download/ktv-mkv", "dual audio + ASS"))
+        rows.append(output_row("KTV MKV", f"{song_url(song_id)}/download/ktv-mkv", "dual audio + ASS", song_id=song_id, kind="ktv-mkv", video=True))
+    templated = report.get("templated_final_mkv")
+    if templated:
+        rows.append(output_row("Template-Named MKV", f"{song_url(song_id)}/download/templated-final-mkv", Path(str(templated)).name))
     if rows:
         rows.append(output_row("Package ZIP", f"{song_url(song_id)}/export", "outputs, reports, lyrics, and takes"))
     for take in takes:
@@ -474,8 +719,17 @@ def render_outputs(
     return "<div class='stack'>" + "".join(rows) + "</div>"
 
 
-def output_row(label: str, href: str, detail: str) -> str:
-    return f"<div><div><strong>{escape(label)}</strong></div><div class='subtle'>{escape(detail)}</div><a class='button secondary' href='{href}'>Download</a></div>"
+def output_row(label: str, href: str, detail: str, *, song_id: str = "", kind: str = "", video: bool = False) -> str:
+    reveal = (
+        f"<a class='button secondary' href='{song_url(song_id)}/reveal/{escape(kind)}'>Reveal</a>"
+        if song_id and kind
+        else ""
+    )
+    preview = f"<video controls src='{href}'></video>" if video else ""
+    return (
+        f"<div><div><strong>{escape(label)}</strong></div><div class='subtle'>{escape(detail)}</div>"
+        f"{preview}<div class='row'><a class='button secondary' href='{href}'>Download</a>{reveal}</div></div>"
+    )
 
 
 def render_mkv_audit(label: str, audit: dict[str, Any]) -> str:
@@ -495,14 +749,16 @@ def render_take_row(song_id: str, take: dict[str, Any]) -> str:
     filename = str(take.get("filename") or "")
     encoded = quote(filename, safe="")
     current = "<span class='badge ok'>current</span>" if take.get("is_current") else ""
+    score_value = "" if take.get("score") is None else str(take.get("score"))
     return f"""
 <div class="take-row">
-  <div class="row"><strong>Saved Take</strong>{current}<span class="badge">{escape(str(take.get("kind") or ""))}</span></div>
+  <div class="row"><strong>Saved Take</strong>{current}<span class="badge">{escape(str(take.get("kind") or ""))}</span><span class="badge">{escape(score_value or "unscored")}</span></div>
   <div class="path">{escape(filename)}</div>
   <form method="post" action="{song_url(song_id)}/take/{encoded}/update" class="tight">
     <div class="take-meta">
       <div><label>Label</label><input name="label" value="{escape(str(take.get("label") or ""))}"></div>
       <div><label>Note</label><input name="note" value="{escape(str(take.get("note") or ""))}"></div>
+      <div><label>Score</label><input name="score" type="number" min="1" max="5" value="{escape(score_value)}"></div>
     </div>
     <div class="row">
       <button class="secondary" type="submit">Save Note</button>
@@ -538,10 +794,18 @@ def render_quality(report: dict[str, Any]) -> str:
     rows.append(
         f"<div class='subtle'>Instrumental RMS delta: {fmt(quality.get('instrumental_rms_delta_db'))}; "
         f"vocals RMS delta: {fmt(quality.get('vocals_rms_delta_db'))}; "
+        f"residual vocal risk: {escape(str(quality.get('vocal_bleed_risk') or 'unknown'))}; "
         f"instrumental silence: {fmt_percent((quality.get('instrumental') or {}).get('silence_ratio'))}; "
         f"duration delta: {fmt(quality.get('duration_delta_seconds'))}s</div>"
     )
     recommendations = quality.get("recommendations") or []
+    recommendations_zh = quality.get("recommendations_zh") or []
+    if recommendations_zh:
+        rows.append(
+            "<div class='tight'>"
+            + "".join(f"<div class='badge warn'>{escape(str(item))}</div>" for item in recommendations_zh)
+            + "</div>"
+        )
     if recommendations:
         rows.append(
             "<div class='tight'>"
@@ -551,9 +815,26 @@ def render_quality(report: dict[str, Any]) -> str:
     return "<div class='tight'>" + "".join(rows) + "</div>"
 
 
+def render_compatibility(report: dict[str, Any]) -> str:
+    compatibility = (report or {}).get("compatibility") or (report or {}).get("audio_replaced_compatibility") or {}
+    matrix = compatibility.get("matrix") or []
+    if not matrix:
+        return "<div class='empty'>Build an MKV to see the player compatibility checklist.</div>"
+    rows = "".join(
+        f"<tr><td>{escape(str(item.get('player') or ''))}</td><td>{escape(str(item.get('platform') or ''))}</td>"
+        f"<td><span class='badge'>{escape(str(item.get('expected') or ''))}</span></td><td class='compact'>{escape(str(item.get('notes') or ''))}</td></tr>"
+        for item in matrix
+    )
+    warnings = "".join(f"<div class='badge warn'>{escape(str(item))}</div>" for item in compatibility.get("warnings") or [])
+    return (
+        f"<div class='tight'><div class='subtle'>Recommended: {escape(str(compatibility.get('recommended_player') or ''))}</div>"
+        f"<table><thead><tr><th>Player</th><th>Platform</th><th>Expected</th><th>Notes</th></tr></thead><tbody>{rows}</tbody></table>{warnings}</div>"
+    )
+
+
 def render_status(status: dict[str, Any]) -> str:
     if not status:
-        return "<div class='empty'>No job history yet.</div>"
+        return "<div id='live-status' data-live-status class='empty'>No job history yet.</div>"
     history = status.get("history") or []
     rows = []
     for item in history[-8:]:
@@ -565,7 +846,7 @@ def render_status(status: dict[str, Any]) -> str:
             f"<tr><td>{escape(str(item.get('time') or ''))}</td><td>{escape(str(item.get('stage') or ''))}</td>"
             f"<td><span class='badge {state_class}'>{escape(state)}</span></td><td class='compact'>{escape(trim(str(item.get('message') or ''), 160))}</td></tr>"
         )
-    return f"<table><thead><tr><th>Time</th><th>Stage</th><th>State</th><th>Message</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return f"<div id='live-status' data-live-status class='subtle'>Live status enabled.</div><table><thead><tr><th>Time</th><th>Stage</th><th>State</th><th>Message</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
 def render_jobs(jobs: list[dict[str, Any]]) -> str:
@@ -584,7 +865,7 @@ def render_jobs(jobs: list[dict[str, Any]]) -> str:
             f"<tr><td>{escape(str(job.get('created_at') or ''))}</td>"
             f"<td class='compact'>{escape(str(job.get('updated_at') or ''))}</td>"
             f"<td><a href='{song_url(str(job.get('song_id') or ''))}'>{escape(str(job.get('song_id') or ''))}</a></td>"
-            f"<td>{escape(str(job.get('stage') or ''))}</td>"
+            f"<td><a href='/jobs/{escape(str(job.get('job_id') or ''))}'>{escape(str(job.get('stage') or ''))}</a></td>"
             f"<td><span class='badge {state_class}'>{escape(state)}</span></td>"
             f"<td><div class='progress'><span style='width:{progress}%'></span></div><div class='compact'>{progress}%</div></td>"
             f"<td class='compact'>{escape(output_hint)}</td>"
@@ -592,6 +873,35 @@ def render_jobs(jobs: list[dict[str, Any]]) -> str:
             f"<td>{actions}</td></tr>"
         )
     return f"<table><thead><tr><th>Created</th><th>Updated</th><th>Song</th><th>Stage</th><th>State</th><th>Progress</th><th>Output</th><th>Message</th><th>Actions</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+
+def render_job_detail(job: dict[str, Any], log_tails: dict[str, str]) -> str:
+    state = str(job.get("state") or "")
+    state_class = (
+        "ok" if state == "completed" else "warn" if state in {"running", "queued", "canceling"} else "bad" if state == "failed" else ""
+    )
+    stage = str(job.get("stage") or "")
+    song_id = str(job.get("song_id") or "")
+    log_text = log_tails.get(stage) or ""
+    return f"""
+<section class="hero">
+  <div><h1>Job {escape(str(job.get("job_id") or "")[:8])}</h1><div class="subtle">{escape(song_id)} / {escape(stage)}</div></div>
+  <span class="badge {state_class}">{escape(state)}</span>
+</section>
+<section class="grid-2">
+  <div class="panel stack">
+    <h2>Job Detail</h2>
+    <div class="metric"><div>Progress</div><div>{fmt(job.get("progress"))}%</div><div>Attempts</div><div>{fmt(job.get("attempts"))}</div><div>Updated</div><div>{escape(str(job.get("updated_at") or ""))}</div></div>
+    <div class="compact">{escape(trim(str(job.get("message") or ""), 800))}</div>
+    <pre>{escape(json_dump(job.get("params") or {}))}</pre>
+    <div class="row"><a class="button secondary" href="{song_url(song_id)}">Open Song</a>{render_job_actions(job)}</div>
+  </div>
+  <div class="panel">
+    <h2>Stage Log Tail</h2>
+    <pre>{escape(log_text or "No log for this stage yet.")}</pre>
+  </div>
+</section>
+"""
 
 
 def render_job_actions(job: dict[str, Any]) -> str:
@@ -610,6 +920,10 @@ def job_output_hint(stage: str) -> str:
         "preview-tracks": "track preview WAVs",
         "extract": "mix.wav",
         "separate": "instrumental.wav, vocals.wav",
+        "separate-sample": "sample instrumental WAV",
+        "set-instrumental": "instrumental.wav",
+        "extract-subtitles": "lyrics.txt, lyrics.ass",
+        "remake-track": "instrumental.wav + audio-replaced MKV",
         "normalize": "instrumental.normalized.wav",
         "align": "alignment.json, lyrics.ass",
         "mux": "final KTV MKV",
@@ -680,6 +994,96 @@ def render_doctor(doctor: dict[str, Any]) -> str:
 """
 
 
+def render_wizard(doctor: dict[str, Any], songs: list[dict[str, Any]], settings: dict[str, Any]) -> str:
+    ready = bool(doctor.get("ok"))
+    song_count = len(songs)
+    return f"""
+<section class="hero">
+  <div><h1>First Run Wizard</h1><div class="subtle">A guided local setup path for the first import, first separation, and first MKV.</div></div>
+  <span class="badge {'ok' if ready else 'bad'}">{'ready' if ready else 'needs attention'}</span>
+</section>
+<section class="grid-2">
+  <div class="panel tight">
+    <h2>1. Check Runtime</h2>
+    <div class="subtle">Doctor checks FFmpeg, yt-dlp, optional Demucs/FunASR, and library folders.</div>
+    <a class="button secondary" href="/doctor">Open Doctor</a>
+  </div>
+  <div class="panel tight">
+    <h2>2. Import Sample</h2>
+    <div class="subtle">Uses assets/朋友-周华健.mkv and sample lyrics so you can test the workflow without typing a file path.</div>
+    <form method="post" action="/sample/import"><button type="submit">Import Bundled Sample</button></form>
+  </div>
+  <div class="panel tight">
+    <h2>3. Tune Defaults</h2>
+    <div class="subtle">Current workers: {escape(str(settings.get("worker_count")))}; preview duration: {escape(str(settings.get("preview_duration")))}s.</div>
+    <a class="button secondary" href="/settings">Open Settings</a>
+  </div>
+  <div class="panel tight">
+    <h2>4. Continue Library</h2>
+    <div class="subtle">{song_count} song(s) imported. Choose a song and run stages separately.</div>
+    <a class="button secondary" href="/">Open Songs</a>
+  </div>
+</section>
+"""
+
+
+def render_import_confirm(source: str, song_id: str, title: str, artist: str) -> str:
+    derived = normalize_song_id(song_id) if song_id else "derived from URL"
+    return f"""
+<section class="hero">
+  <div><h1>Confirm URL Import</h1><div class="subtle">Remote downloads are queued only after rights confirmation.</div></div>
+</section>
+<section class="panel stack">
+  <div><strong>URL</strong><div class="path">{escape(source)}</div></div>
+  <div><strong>Song ID</strong><div class="compact">{escape(derived)}</div></div>
+  <form method="post" action="/import" class="stack">
+    <input type="hidden" name="source" value="{escape(source)}">
+    <input type="hidden" name="song_id" value="{escape(song_id)}">
+    <input type="hidden" name="title" value="{escape(title)}">
+    <input type="hidden" name="artist" value="{escape(artist)}">
+    <input type="hidden" name="confirm" value="1">
+    <label class="checkbox-line"><input name="rights" value="1" type="checkbox" required> 我确认自己有权下载并处理这个 URL，仅用于个人本地制作。</label>
+    <div class="row"><button type="submit">Queue Download</button><a class="button secondary" href="/">Cancel</a></div>
+  </form>
+</section>
+"""
+
+
+def render_storage(report: dict[str, Any]) -> str:
+    root_rows = "".join(
+        f"<tr><td>{escape(str(row.get('name') or ''))}</td><td class='path'>{escape(str(row.get('path') or ''))}</td><td>{escape(str(row.get('size') or ''))}</td></tr>"
+        for row in report.get("roots") or []
+    )
+    song_rows = "".join(
+        f"<tr><td><a href='{song_url(str(song.get('song_id') or ''))}'>{escape(str(song.get('song_id') or ''))}</a></td><td>{escape(str(song.get('total') or ''))}</td></tr>"
+        for song in report.get("songs") or []
+    )
+    return f"""
+<section class="hero">
+  <div><h1>Disk Manager</h1><div class="subtle">Track raw, work, output, takes, jobs, and inbox storage.</div></div>
+  <span class="badge">{escape(str(report.get("total") or "0 B"))}</span>
+</section>
+<section class="grid-2">
+  <div class="panel"><h2>Library Roots</h2><table><thead><tr><th>Name</th><th>Path</th><th>Size</th></tr></thead><tbody>{root_rows}</tbody></table></div>
+  <div class="panel"><h2>Largest Songs</h2><table><thead><tr><th>Song</th><th>Size</th></tr></thead><tbody>{song_rows or "<tr><td colspan='2'><div class='empty'>No songs yet.</div></td></tr>"}</tbody></table></div>
+</section>
+"""
+
+
+def render_roadmap() -> str:
+    return """
+<section class="hero">
+  <div><h1>Roadmap</h1><div class="subtle">Explicit v1/v2 boundaries and non-goals.</div></div>
+</section>
+<section class="grid-2">
+  <div class="panel tight"><h2>v1 Scope</h2><div>Local import, track preview, manual lyrics, Demucs separation, ASS generation, MKV mux, support bundle, and recoverable jobs.</div></div>
+  <div class="panel tight"><h2>v2 Candidates</h2><div>Automatic lyric search, high-quality forced alignment backends, packaged desktop app, richer waveform subtitle editor, and managed browser automation.</div></div>
+  <div class="panel tight"><h2>Non-Goals</h2><div>No DRM bypass, no copyright evasion, no hosted cloud library, and no mandatory Node frontend.</div></div>
+  <div class="panel tight"><h2>Compatibility Target</h2><div>MKV playback is optimized for VLC and IINA first; QuickTime is treated as limited.</div></div>
+</section>
+"""
+
+
 def render_settings(settings: dict[str, Any]) -> str:
     return f"""
 <section class="hero">
@@ -698,6 +1102,16 @@ def render_settings(settings: dict[str, Any]) -> str:
       <div><label>Demucs model</label><input name="demucs_model" value="{escape(str(settings.get("demucs_model") or "htdemucs"))}"></div>
       <div><label>Demucs device</label><select name="demucs_device">{render_select_options(["auto", "mps", "cpu", "cuda"], str(settings.get("demucs_device") or "auto"))}</select></div>
       <div><label>Normalize target I</label><input name="normalize_target_i" type="number" step="0.5" value="{fmt_attr(settings.get("normalize_target_i"))}"></div>
+      <div><label>Default audio order</label><select name="default_audio_order">{render_select_options(["instrumental-first", "original-first"], str(settings.get("default_audio_order") or "instrumental-first"))}</select></div>
+      <div><label>Default duration limit</label><input name="default_duration_limit" type="number" min="0" step="1" value="{fmt_attr(settings.get("default_duration_limit"))}"></div>
+      <div><label>Subtitle font size</label><input name="subtitle_font_size" type="number" min="20" max="96" value="{fmt_attr(settings.get("subtitle_font_size"))}"></div>
+      <div><label>Subtitle margin V</label><input name="subtitle_margin_v" type="number" min="10" max="180" value="{fmt_attr(settings.get("subtitle_margin_v"))}"></div>
+      <div><label>Subtitle primary colour</label><input name="subtitle_primary_colour" value="{escape(str(settings.get("subtitle_primary_colour") or "&H00FFFFFF"))}"></div>
+      <div><label>Subtitle secondary colour</label><input name="subtitle_secondary_colour" value="{escape(str(settings.get("subtitle_secondary_colour") or "&H0000D7FF"))}"></div>
+      <div><label>Instrumental track title</label><input name="instrumental_track_title" value="{escape(str(settings.get("instrumental_track_title") or "伴奏"))}"></div>
+      <div><label>Original track title</label><input name="original_track_title" value="{escape(str(settings.get("original_track_title") or "原唱"))}"></div>
+      <div class="field-wide"><label>Output template</label><input name="output_template" value="{escape(str(settings.get("output_template") or "{song_id}.ktv.mkv"))}"></div>
+      <label class="checkbox-line"><input name="package_include_logs" value="1" type="checkbox" {"checked" if settings.get("package_include_logs") else ""}> Include logs in support packages by default</label>
     </div>
     <div><button type="submit">Save Settings</button></div>
   </form>

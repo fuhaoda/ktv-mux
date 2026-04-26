@@ -30,7 +30,17 @@ def escape_ass_text(text: str) -> str:
     return text.replace("{", "｛").replace("}", "｝").replace("\n", r"\N")
 
 
-def build_ass(alignment: dict[str, Any], *, title: str = "ktv-mux lyrics") -> str:
+def build_ass(
+    alignment: dict[str, Any],
+    *,
+    title: str = "ktv-mux lyrics",
+    style: dict[str, Any] | None = None,
+) -> str:
+    style = style or {}
+    font_size = int(style.get("font_size") or 48)
+    margin_v = int(style.get("margin_v") or 58)
+    primary_colour = str(style.get("primary_colour") or "&H00FFFFFF")
+    secondary_colour = str(style.get("secondary_colour") or "&H0000D7FF")
     lines = [
         "[Script Info]",
         f"Title: {escape_ass_text(title)}",
@@ -43,7 +53,7 @@ def build_ass(alignment: dict[str, Any], *, title: str = "ktv-mux lyrics") -> st
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: KTV,Arial Unicode MS,48,&H00FFFFFF,&H0000D7FF,&H00000000,&H7F000000,-1,0,0,0,100,100,0,0,1,3,1,2,60,60,58,1",
+        f"Style: KTV,Arial Unicode MS,{font_size},{primary_colour},{secondary_colour},&H00000000,&H7F000000,-1,0,0,0,100,100,0,0,1,3,1,2,60,60,{margin_v},1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -56,4 +66,3 @@ def build_ass(alignment: dict[str, Any], *, title: str = "ktv-mux lyrics") -> st
             text = escape_ass_text(str(item.get("text", "")))
         lines.append(f"Dialogue: 0,{start},{end},KTV,,0,0,0,,{text}")
     return "\n".join(lines) + "\n"
-

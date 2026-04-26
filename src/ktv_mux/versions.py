@@ -29,6 +29,7 @@ def list_takes(library: LibraryPaths, song_id: str) -> list[dict[str, Any]]:
                 "kind": kind,
                 "label": meta.get("label") or "",
                 "note": meta.get("note") or "",
+                "score": meta.get("score"),
                 "created_at": meta.get("created_at") or "",
                 "updated_at": meta.get("updated_at") or "",
                 "is_current": current.get(kind) == path.name,
@@ -54,13 +55,16 @@ def record_take(library: LibraryPaths, song_id: str, path: Path, *, label: str =
     _write_takes(library, clean_id, data)
 
 
-def update_take(library: LibraryPaths, song_id: str, filename: str, *, label: str, note: str) -> None:
+def update_take(library: LibraryPaths, song_id: str, filename: str, *, label: str, note: str, score: int | None = None) -> None:
     clean_id = normalize_song_id(song_id)
     path = _take_path(library, clean_id, filename)
     data = _read_takes(library, clean_id)
     items = data.setdefault("items", {})
     item = items.setdefault(path.name, {"kind": take_kind(path.name), "created_at": utc_now()})
-    item.update({"label": label.strip(), "note": note.strip(), "updated_at": utc_now()})
+    update = {"label": label.strip(), "note": note.strip(), "updated_at": utc_now()}
+    if score is not None:
+        update["score"] = max(1, min(5, int(score)))
+    item.update(update)
     _write_takes(library, clean_id, data)
 
 

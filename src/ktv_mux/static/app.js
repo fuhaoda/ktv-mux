@@ -60,4 +60,54 @@
       lastTimeInput.dispatchEvent(new Event("input"));
     });
   });
+
+  document.querySelectorAll("[data-use-playhead]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var player = document.querySelector("[data-subtitle-player]");
+      if (!player || !lastTimeInput) return;
+      lastTimeInput.value = Number(player.currentTime || 0).toFixed(2);
+      lastTimeInput.dispatchEvent(new Event("input"));
+    });
+  });
+
+  document.querySelectorAll("[data-seek-time]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var player = document.querySelector("[data-subtitle-player]");
+      if (!player) return;
+      player.currentTime = parseFloat(button.getAttribute("data-seek-time") || "0");
+      player.play().catch(function () {});
+    });
+  });
+
+  document.addEventListener("keydown", function (event) {
+    var active = document.activeElement;
+    if (active && ["INPUT", "TEXTAREA", "SELECT"].indexOf(active.tagName) !== -1) return;
+    var player = document.querySelector("[data-subtitle-player]");
+    if (!player) return;
+    if (event.key === "[") {
+      player.currentTime = Math.max(0, Number(player.currentTime || 0) - 0.1);
+    } else if (event.key === "]") {
+      player.currentTime = Number(player.currentTime || 0) + 0.1;
+    } else if (event.key.toLowerCase() === "s" && lastTimeInput) {
+      lastTimeInput.value = Number(player.currentTime || 0).toFixed(2);
+      lastTimeInput.dispatchEvent(new Event("input"));
+    }
+  });
+
+  var live = document.querySelector("[data-live-status]");
+  if (live && window.EventSource) {
+    var source = new EventSource("/events");
+    source.addEventListener("jobs", function (event) {
+      try {
+        var payload = JSON.parse(event.data);
+        var active = (payload.jobs || []).filter(function (job) {
+          return ["queued", "running", "canceling"].indexOf(job.state) !== -1;
+        });
+        live.textContent = active.length ? active.length + " active job(s). Refreshing status..." : "No active jobs.";
+        if (!active.length) source.close();
+      } catch (error) {
+        live.textContent = "Live status update could not be parsed.";
+      }
+    });
+  }
 })();

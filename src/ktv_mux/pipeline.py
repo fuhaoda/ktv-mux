@@ -18,12 +18,14 @@ from .alignment import (
 )
 from .ass import build_ass
 from .checkpoints import record_stage_checkpoint, stage_checkpoint_completed
+from .compatibility import compatibility_report
 from .errors import PipelineStateError
 from .jsonio import read_json, write_json
 from .library import import_source, load_song, save_lyrics_file
 from .media import (
     extract_mix,
     extract_preview,
+    extract_subtitle,
     mux_ktv,
     normalize_wav,
     probe_media,
@@ -31,8 +33,11 @@ from .media import (
     run_demucs_two_stems,
 )
 from .models import Song, append_stage_status, update_report, utc_now
+from .output_templates import render_output_filename
 from .paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
 from .quality import mkv_audit_report, separation_quality_report
+from .separation_presets import resolve_separation_preset
+from .settings import load_settings
 from .versions import record_take
 
 StageFunc = Callable[[], Any]
@@ -177,7 +182,8 @@ class Pipeline:
         self,
         song_id: str,
         *,
-        model: str = "htdemucs",
+        preset: str = "balanced",
+        model: str | None = None,
         device: str | None = None,
         cancel_file: Path | None = None,
     ) -> dict[str, Any]:
@@ -185,16 +191,19 @@ class Pipeline:
         mix = self._require_file(self.library.mix_wav(clean_id), "Run extract before separate.")
 
         def stage() -> dict[str, Any]:
+            separation = resolve_separation_preset(preset, model=model, device=device)
             result = run_demucs_two_stems(
                 mix,
                 self.library.work_dir(clean_id),
                 self.library.instrumental_wav(clean_id),
                 self.library.vocals_wav(clean_id),
-                model=model,
-                device=device,
+                model=str(separation["model"]),
+                device=str(separation["device"]),
                 log_path=self.library.stage_log(clean_id, "separate"),
                 cancel_file=cancel_file,
             )
+            result["preset"] = separation["id"]
+            result["preset_label"] = separation["label"]
             update_report(
                 self.library.report_json(clean_id),
                 separation=result,
@@ -208,13 +217,163 @@ class Pipeline:
                         self.library,
                         clean_id,
                         self.library.instrumental_wav(clean_id),
-                        label=f"{result.get('model')} / {result.get('requested_device')}",
+                        label=f"{result.get('preset_label')} / {result.get('model')} / {result.get('requested_device')}",
                     )
                 ),
             )
             return result
 
         return self._run_stage(clean_id, "separate", stage)
+
+    def separate_sample(
+        self,
+        song_id: str,
+        *,
+        audio_index: int = 0,
+        start: float = 0.0,
+        duration: float = 30.0,
+        preset: str = "fast-review",
+        model: str | None = None,
+        device: str | None = None,
+        cancel_file: Path | None = None,
+    ) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        source = self.library.source_path(clean_id)
+
+        def stage() -> dict[str, Any]:
+            _validate_audio_index(source, audio_index)
+            mix = extract_preview(
+                source,
+                self.library.sample_mix_wav(clean_id),
+                audio_index=audio_index,
+                start=start,
+                duration=duration,
+                cancel_file=cancel_file,
+            )
+            separation = resolve_separation_preset(preset, model=model, device=device)
+            result = run_demucs_two_stems(
+                mix,
+                self.library.work_dir(clean_id) / "sample",
+                self.library.instrumental_sample_wav(clean_id),
+                self.library.vocals_sample_wav(clean_id),
+                model=str(separation["model"]),
+                device=str(separation["device"]),
+                log_path=self.library.stage_log(clean_id, "separate-sample"),
+                cancel_file=cancel_file,
+            )
+            result.update(
+                {
+                    "preset": separation["id"],
+                    "preset_label": separation["label"],
+                    "audio_index": audio_index,
+                    "start": start,
+                    "duration": duration,
+                    "sample_mix": str(mix),
+                }
+            )
+            update_report(
+                self.library.report_json(clean_id),
+                separation_sample=result,
+                separation_sample_quality=separation_quality_report(
+                    mix_wav=mix,
+                    instrumental_wav=self.library.instrumental_sample_wav(clean_id),
+                    vocals_wav=self.library.vocals_sample_wav(clean_id),
+                ),
+            )
+            return result
+
+        return self._run_stage(clean_id, "separate-sample", stage)
+
+    def set_instrumental(self, song_id: str, source_path: Path, *, label: str = "external instrumental") -> Path:
+        clean_id = normalize_song_id(song_id)
+        source = Path(source_path).expanduser()
+        if not source.exists():
+            raise PipelineStateError(f"Instrumental file does not exist: {source}")
+
+        def stage() -> Path:
+            target = self.library.instrumental_wav(clean_id)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.resolve() != target.resolve():
+                shutil.copy2(source, target)
+            take = _archive_take(self.library, clean_id, target, label=label)
+            update_report(
+                self.library.report_json(clean_id),
+                instrumental_wav=str(target),
+                external_instrumental={"source": str(source), "label": label},
+                instrumental_take=str(take),
+            )
+            return target
+
+        return self._run_stage(clean_id, "set-instrumental", stage)
+
+    def remake_track(
+        self,
+        song_id: str,
+        *,
+        audio_index: int = 0,
+        keep_audio_index: int = 0,
+        preset: str = "balanced",
+        model: str | None = None,
+        device: str | None = None,
+        copy_subtitles: bool = True,
+        duration_limit: float | None = None,
+        cancel_file: Path | None = None,
+    ) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        self.extract(clean_id, audio_index=audio_index, cancel_file=cancel_file)
+        separation = self.separate(clean_id, preset=preset, model=model, device=device, cancel_file=cancel_file)
+        replaced = self.replace_audio(
+            clean_id,
+            keep_audio_index=keep_audio_index,
+            copy_subtitles=copy_subtitles,
+            duration_limit=duration_limit,
+            cancel_file=cancel_file,
+        )
+        update_report(
+            self.library.report_json(clean_id),
+            remade_from_audio_index=audio_index,
+            remade_from_audio_track=audio_index + 1,
+            remade_keep_audio_index=keep_audio_index,
+            remade_keep_audio_track=keep_audio_index + 1,
+        )
+        return {"song_id": clean_id, "separation": separation, "audio_replaced_mkv": str(replaced)}
+
+    def extract_embedded_subtitles(
+        self,
+        song_id: str,
+        *,
+        subtitle_index: int = 0,
+        cancel_file: Path | None = None,
+    ) -> Path:
+        clean_id = normalize_song_id(song_id)
+        source = self.library.source_path(clean_id)
+
+        def stage() -> Path:
+            info = probe_media(source)
+            subtitle_streams = info["subtitle_streams"]
+            if subtitle_index < 0 or subtitle_index >= len(subtitle_streams):
+                raise PipelineStateError(
+                    f"Subtitle Track {subtitle_index + 1} does not exist. "
+                    f"This source has {len(subtitle_streams)} subtitle track(s)."
+                )
+            codec = str(subtitle_streams[subtitle_index].get("codec_name") or "").lower()
+            suffix = ".srt" if codec in {"subrip", "srt"} else ".ass"
+            extracted = self.library.embedded_lyrics_file(clean_id, suffix)
+            extract_subtitle(source, extracted, subtitle_index=subtitle_index, cancel_file=cancel_file)
+            result = save_lyrics_file(self.library, clean_id, extracted)
+            update_report(
+                self.library.report_json(clean_id),
+                extracted_subtitles={
+                    "subtitle_index": subtitle_index,
+                    "subtitle_track": subtitle_index + 1,
+                    "codec": codec,
+                    "path": str(extracted),
+                    "lyrics_path": str(result),
+                },
+            )
+            return result
+
+        return self._run_stage(clean_id, "extract-subtitles", stage)
 
     def align(self, song_id: str, *, backend: str = "auto") -> dict[str, Any]:
         clean_id = normalize_song_id(song_id)
@@ -230,7 +389,7 @@ class Pipeline:
             lrc_path = self.library.original_lyrics_file(clean_id, ".lrc")
             alignment = align_lyrics(audio, lyrics, duration=duration, backend=backend, lrc_path=lrc_path)
             write_json(self.library.alignment_json(clean_id), alignment)
-            ass_text = build_ass(alignment, title=clean_id)
+            ass_text = build_ass(alignment, title=clean_id, style=_ass_style(self.library))
             self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
             self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
             update_report(
@@ -257,7 +416,7 @@ class Pipeline:
             alignment = read_json(alignment_path, default={}) or {}
             shifted = shift_alignment(alignment, seconds)
             write_json(alignment_path, shifted)
-            ass_text = build_ass(shifted, title=clean_id)
+            ass_text = build_ass(shifted, title=clean_id, style=_ass_style(self.library))
             self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
             self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
             update_report(
@@ -297,7 +456,7 @@ class Pipeline:
                 offset_seconds=seconds,
             )
             write_json(alignment_path, shifted)
-            ass_text = build_ass(shifted, title=clean_id)
+            ass_text = build_ass(shifted, title=clean_id, style=_ass_style(self.library))
             self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
             self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
             update_report(
@@ -334,7 +493,7 @@ class Pipeline:
                 target_end=target_end,
             )
             write_json(alignment_path, stretched)
-            ass_text = build_ass(stretched, title=clean_id)
+            ass_text = build_ass(stretched, title=clean_id, style=_ass_style(self.library))
             self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
             self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
             update_report(
@@ -357,7 +516,7 @@ class Pipeline:
             alignment = read_json(alignment_path, default={}) or {}
             edited = update_alignment_lines(alignment, updates)
             write_json(alignment_path, edited)
-            ass_text = build_ass(edited, title=clean_id)
+            ass_text = build_ass(edited, title=clean_id, style=_ass_style(self.library))
             self.library.lyrics_ass(clean_id).parent.mkdir(parents=True, exist_ok=True)
             self.library.lyrics_ass(clean_id).write_text(ass_text, encoding="utf-8")
             update_report(
@@ -392,6 +551,7 @@ class Pipeline:
         output = self.library.final_mkv(clean_id)
 
         def stage() -> Path:
+            settings = load_settings(self.library)
             result = mux_ktv(
                 source,
                 instrumental,
@@ -400,14 +560,20 @@ class Pipeline:
                 output,
                 duration_limit=duration_limit,
                 audio_order=audio_order,
+                instrumental_title=str(settings["instrumental_track_title"]),
+                original_title=str(settings["original_track_title"]),
                 cancel_file=cancel_file,
             )
             output_probe = probe_media(result)
+            audit = mkv_audit_report(output_probe, expected_audio_streams=2, expected_subtitle_streams=1)
+            templated = _copy_templated_output(self.library, clean_id, result, kind="ktv")
             update_report(
                 self.library.report_json(clean_id),
                 final_mkv=str(result),
                 audio_order=audio_order,
-                final_mkv_audit=mkv_audit_report(output_probe, expected_audio_streams=2, expected_subtitle_streams=1),
+                final_mkv_audit=audit,
+                compatibility=compatibility_report(audit),
+                templated_final_mkv=str(templated) if templated else None,
                 final_mkv_take=str(_archive_take(self.library, clean_id, result)),
             )
             return result
@@ -433,6 +599,7 @@ class Pipeline:
 
         def stage() -> Path:
             _validate_audio_index(source, keep_audio_index)
+            settings = load_settings(self.library)
             result = replace_audio_track(
                 source,
                 instrumental,
@@ -440,17 +607,21 @@ class Pipeline:
                 keep_audio_index=keep_audio_index,
                 copy_subtitles=copy_subtitles,
                 duration_limit=duration_limit,
+                instrumental_title=str(settings["instrumental_track_title"]),
+                original_title=str(settings["original_track_title"]),
                 cancel_file=cancel_file,
             )
             output_probe = probe_media(result)
+            audit = mkv_audit_report(
+                output_probe,
+                expected_audio_streams=2,
+                expected_subtitle_streams=0,
+            )
             update_report(
                 self.library.report_json(clean_id),
                 audio_replaced_mkv=str(result),
-                audio_replaced_mkv_audit=mkv_audit_report(
-                    output_probe,
-                    expected_audio_streams=2,
-                    expected_subtitle_streams=0,
-                ),
+                audio_replaced_mkv_audit=audit,
+                audio_replaced_compatibility=compatibility_report(audit),
                 audio_replaced_mkv_take=str(_archive_take(self.library, clean_id, result)),
                 kept_audio_index=keep_audio_index,
                 kept_audio_track=keep_audio_index + 1,
@@ -499,6 +670,9 @@ class Pipeline:
             for path in [
                 self.library.mix_wav(clean_id),
                 self.library.vocals_wav(clean_id),
+                self.library.sample_mix_wav(clean_id),
+                self.library.vocals_sample_wav(clean_id),
+                self.library.instrumental_sample_wav(clean_id),
                 self.library.alignment_json(clean_id),
             ]:
                 if path.exists():
@@ -540,7 +714,7 @@ class Pipeline:
         start_stage: str,
         align_backend: str = "auto",
         audio_index: int = 0,
-        model: str = "htdemucs",
+        model: str | None = None,
         device: str | None = None,
         duration_limit: float | None = None,
         cancel_file: Path | None = None,
@@ -616,7 +790,8 @@ class Pipeline:
                 elif stage == "separate":
                     result = self.separate(
                         song_id,
-                        model=str(params.get("model", "htdemucs")),
+                        preset=str(params.get("separation_preset", params.get("preset", "balanced"))),
+                        model=params.get("model"),
                         device=params.get("device"),
                     )
                 else:
@@ -726,6 +901,12 @@ def _stage_outputs(library: LibraryPaths, song_id: str, stage: str) -> list[Path
         return sorted(library.previews_dir(song_id).glob("track-*.wav"))
     if stage == "separate":
         return [library.instrumental_wav(song_id), library.vocals_wav(song_id)]
+    if stage == "separate-sample":
+        return [library.instrumental_sample_wav(song_id), library.vocals_sample_wav(song_id)]
+    if stage == "set-instrumental":
+        return [library.instrumental_wav(song_id)]
+    if stage == "extract-subtitles":
+        return [library.lyrics_txt(song_id), library.lyrics_ass(song_id)]
     if stage in {"align", "shift-subtitles", "shift-subtitle-lines", "stretch-subtitle-lines", "edit-subtitles"}:
         return [library.alignment_json(song_id), library.lyrics_ass(song_id)]
     if stage == "mux":
@@ -735,6 +916,16 @@ def _stage_outputs(library: LibraryPaths, song_id: str, stage: str) -> list[Path
     if stage == "normalize":
         return [library.normalized_instrumental_wav(song_id)]
     return []
+
+
+def _ass_style(library: LibraryPaths) -> dict[str, Any]:
+    settings = load_settings(library)
+    return {
+        "font_size": settings["subtitle_font_size"],
+        "margin_v": settings["subtitle_margin_v"],
+        "primary_colour": settings["subtitle_primary_colour"],
+        "secondary_colour": settings["subtitle_secondary_colour"],
+    }
 
 
 def _checkpoint_has_outputs(library: LibraryPaths, song_id: str, stage: str) -> bool:
@@ -816,6 +1007,20 @@ def _archive_take(library: LibraryPaths, song_id: str, path: Path, *, label: str
     shutil.copy2(path, take)
     record_take(library, song_id, take, label=label)
     return take
+
+
+def _copy_templated_output(library: LibraryPaths, song_id: str, path: Path, *, kind: str) -> Path | None:
+    settings = load_settings(library)
+    filename = render_output_filename(
+        str(settings.get("output_template") or "{song_id}.ktv.mkv"),
+        {"song_id": song_id, "kind": kind},
+        suffix=path.suffix,
+    )
+    target = library.output_dir(song_id) / filename
+    if target == path:
+        return None
+    shutil.copy2(path, target)
+    return target
 
 
 @contextmanager

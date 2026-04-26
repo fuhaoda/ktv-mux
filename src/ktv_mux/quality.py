@@ -54,7 +54,9 @@ def separation_quality_report(
         "sample_rate_match": _same_metric("sample_rate", mix, instrumental, vocals),
         "channel_match": _same_metric("channels", mix, instrumental, vocals),
     }
+    report["vocal_bleed_risk"] = vocal_bleed_risk(report)
     report["recommendations"] = quality_recommendations(report)
+    report["recommendations_zh"] = quality_recommendations_zh(report)
     return report
 
 
@@ -120,11 +122,59 @@ def quality_recommendations(report: dict[str, Any]) -> list[str]:
     instrumental_delta = report.get("instrumental_rms_delta_db")
     if vocals_delta is not None and instrumental_delta is not None and float(vocals_delta) >= float(instrumental_delta):
         recommendations.append("Vocal separation may be weak. Try another source track or Demucs model.")
+    if report.get("vocal_bleed_risk") == "high":
+        recommendations.append("High residual vocal risk. Review a chorus section before replacing Track 2.")
     if vocals.get("exists") is False or instrumental.get("exists") is False:
         recommendations.append("One or more stem files are missing. Re-run separation before muxing.")
     if not recommendations:
         recommendations.append("No obvious level issues detected.")
     return recommendations
+
+
+def quality_recommendations_zh(report: dict[str, Any]) -> list[str]:
+    recommendations: list[str] = []
+    instrumental = report.get("instrumental") or {}
+    vocals = report.get("vocals") or {}
+    mix = report.get("mix") or {}
+    if _metric(instrumental, "clipped_ratio") > 0.001 or _metric(mix, "clipped_ratio") > 0.001:
+        recommendations.append("检测到爆音；封装前建议降低源音频或伴奏增益。")
+    if _metric(vocals, "clipped_ratio") > 0.001:
+        recommendations.append("人声轨有爆音；建议重新分离或先做响度归一化。")
+    if report.get("duration_delta_seconds") is not None and float(report["duration_delta_seconds"]) > 0.5:
+        recommendations.append("分离后的音频时长和原混不一致；建议重新抽音频并重新分离。")
+    if report.get("sample_rate_match") is False:
+        recommendations.append("音频采样率不一致；建议重新渲染 WAV 后再封装。")
+    if report.get("channel_match") is False:
+        recommendations.append("声道布局不一致；建议重新渲染 WAV 后再封装。")
+    if _metric(instrumental, "silence_ratio") > 0.2:
+        recommendations.append("伴奏里有较长静音；请确认选择的是正确的源音轨。")
+    instrumental_rms = instrumental.get("rms_dbfs")
+    if instrumental_rms is not None and float(instrumental_rms) < -30:
+        recommendations.append("伴奏音量偏小；可以归一化或换一个源音轨。")
+    vocals_delta = report.get("vocals_rms_delta_db")
+    instrumental_delta = report.get("instrumental_rms_delta_db")
+    if vocals_delta is not None and instrumental_delta is not None and float(vocals_delta) >= float(instrumental_delta):
+        recommendations.append("人声去除效果可能偏弱；建议尝试另一个源音轨或 Demucs 模型。")
+    if report.get("vocal_bleed_risk") == "high":
+        recommendations.append("残留人声风险较高；建议先试听副歌片段，再决定是否替换第 2 轨。")
+    if vocals.get("exists") is False or instrumental.get("exists") is False:
+        recommendations.append("缺少伴奏或人声 stem；请先重新运行分离。")
+    if not recommendations:
+        recommendations.append("没有发现明显电平问题；建议用播放器试听最终效果。")
+    return recommendations
+
+
+def vocal_bleed_risk(report: dict[str, Any]) -> str:
+    vocals_delta = report.get("vocals_rms_delta_db")
+    instrumental_delta = report.get("instrumental_rms_delta_db")
+    if vocals_delta is None or instrumental_delta is None:
+        return "unknown"
+    gap = float(instrumental_delta) - float(vocals_delta)
+    if gap < 1.0:
+        return "high"
+    if gap < 4.0:
+        return "medium"
+    return "low"
 
 
 def _dbfs(value: int, full_scale: float) -> float | None:

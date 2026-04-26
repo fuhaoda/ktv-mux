@@ -34,6 +34,9 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.8",
 ]
+browser = [
+  "playwright>=1.45",
+]
 
 [project.scripts]
 ktv = "ktv_mux.cli:main"
@@ -49,6 +52,7 @@ testpaths = ["tests"]
 markers = [
   "integration: requires ffmpeg/ffprobe and bundled media assets",
   "slow: requires heavyweight ML models or network downloads",
+  "browser: requires Playwright browser dependencies",
 ]
 
 [tool.ruff]

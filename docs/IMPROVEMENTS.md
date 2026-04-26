@@ -87,3 +87,63 @@ This pass addressed the next ten self-review items.
 8. Mux and replace-audio outputs are probed after creation and audited into `report.json`.
 9. `doctor` checks include concrete fix commands for missing runtime dependencies.
 10. Docs now include a deterministic bundled-sample smoke workflow and updated command reference.
+
+## Product Hardening Pass
+
+This pass addressed the twenty strict product-engineering review items.
+
+1. Added a First Run Wizard and bundled sample import button.
+2. Added URL import confirmation with explicit rights acknowledgement.
+3. Added failure recovery UI with force rerun and run-from-failed-stage actions.
+4. Added A/B review controls for current audio and saved instrumental takes.
+5. Added Chinese quality recommendations alongside raw metrics.
+6. Added a lightweight SSE job status endpoint and browser EventSource hook.
+7. Added subtitle playhead coupling for focused timing inputs.
+8. Added SRT and ASS lyric import into `alignment.json` and `lyrics.ass`.
+9. Added `library/inbox` scan import from CLI and Web.
+10. Added library search/filter controls.
+11. Added disk usage reporting and a Web Disk Manager.
+12. Added output template settings with template-named MKV copies.
+13. Expanded export ZIPs into support bundles with Doctor, settings, storage, and environment data.
+14. Added a player compatibility matrix for VLC, IINA, Infuse, QuickTime, and Windows Media Player.
+15. Expanded install docs and browser-test optional dependency metadata.
+16. Added Web batch-stage console.
+17. Added copyright/permissions copy in the URL import flow.
+18. Added explicit roadmap, v1/v2 boundaries, and non-goals.
+19. Added take scoring so listening decisions are recorded.
+20. Added focused tests for the new parsing, storage, Web, export, settings, and compatibility paths.
+
+## Modular Product Pass
+
+This pass addressed the strict 30-point module-level product review.
+
+1. Added Web workflow tabs and a single-module launcher so track review, audio, lyrics, mux, outputs, and jobs can be opened directly.
+2. Added CLI/Web `separate-sample` for short Demucs trial runs before processing a full song.
+3. Added separation presets (`fast-review`, `balanced`, `clean-vocal`, `quality`) with model/device overrides.
+4. Added CLI/Web `remake-track` for the common Track 1 -> instrumental -> replace Track 2 scenario.
+5. Added CLI/Web external instrumental import through `set-instrumental` and Web upload.
+6. Added embedded subtitle extraction into lyrics/alignment/ASS.
+7. Added lyrics revision snapshots under `raw/{song_id}/lyrics-versions`.
+8. Added song tags and rating metadata for library triage.
+9. Added subtitle style settings and configurable MKV audio track titles.
+10. Added residual vocal risk scoring and Chinese warnings for high vocal bleed.
+11. Added Track Decision buttons for choosing, sampling, or remaking from each source audio track.
+12. Added source subtitle track actions for using embedded subtitles as lyrics input.
+13. Added copy-subtitles controls to replace-audio/remake workflows.
+14. Added sample instrumental/vocal preview and download paths.
+15. Added final MKV and audio-replaced MKV inline video preview.
+16. Added macOS Finder reveal links for generated outputs.
+17. Added Web job detail pages with params, progress, actions, and log tails.
+18. Added batch console dry-run, audio-index, and separation-preset controls.
+19. Improved URL rights text in Chinese for local-first personal-use workflows.
+20. Added duplicate-source hints based on similar extension and size, complementing exact fingerprints.
+21. Expanded library search to include tags.
+22. Added keyboard/playhead helpers for subtitle timing buttons.
+23. Added CPU retry and short-sample recovery actions after failures.
+24. Added output settings for subtitle font size, margin, colors, and audio track names.
+25. Added command-construction tests for subtitle extraction and configurable track titles.
+26. Added unit tests for presets, lyrics revisions, tags/rating, ASS style, and residual vocal risk.
+27. Added Web tests for module controls, job details, external instrumental upload, and localized rights copy.
+28. Kept v1 dependency boundaries: no Node frontend and no MKVToolNix requirement.
+29. Documented modular CLI usage in the README.
+30. Added an acceptance checklist for manual and automated release verification.
