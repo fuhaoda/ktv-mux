@@ -2,13 +2,22 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KTV_BIN="${KTV_BIN:-$ROOT/.venv/bin/ktv}"
+DEFAULT_KTV_BIN="$ROOT/.venv/bin/ktv"
+if [ -z "${KTV_BIN:-}" ]; then
+  if [ -x "$DEFAULT_KTV_BIN" ]; then
+    KTV_BIN="$DEFAULT_KTV_BIN"
+  elif command -v ktv >/dev/null 2>&1; then
+    KTV_BIN="$(command -v ktv)"
+  else
+    KTV_BIN="$DEFAULT_KTV_BIN"
+  fi
+fi
 ASSET="${ASSET:-$ROOT/assets/朋友-周华健.mkv}"
 WORK="${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/ktv-smoke.XXXXXX")}"
 LIBRARY="$WORK/library"
 SONG_ID="朋友-周华健"
 
-if [ ! -x "$KTV_BIN" ]; then
+if ! command -v "$KTV_BIN" >/dev/null 2>&1; then
   echo "ktv executable not found: $KTV_BIN" >&2
   exit 1
 fi
