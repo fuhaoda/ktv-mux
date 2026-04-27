@@ -60,6 +60,58 @@ def separation_quality_report(
     return report
 
 
+def instrumental_fit_report(*, reference_wav: Path | None, instrumental_wav: Path) -> dict[str, Any]:
+    instrumental = analyze_wav(instrumental_wav)
+    reference = analyze_wav(reference_wav) if reference_wav and reference_wav.exists() else {"exists": False}
+    warnings: list[str] = []
+    if instrumental.get("exists") is False:
+        warnings.append("Instrumental file is missing or could not be analyzed.")
+    if reference.get("exists"):
+        duration_delta = _duration_delta(reference, instrumental)
+        if duration_delta is not None and duration_delta > 0.5:
+            warnings.append(f"Duration differs from mix by {duration_delta:.3f}s.")
+        if _same_metric("sample_rate", reference, instrumental) is False:
+            warnings.append("Sample rate differs from the extracted mix.")
+        if _same_metric("channels", reference, instrumental) is False:
+            warnings.append("Channel count differs from the extracted mix.")
+    if _metric(instrumental, "clipped_ratio") > 0.001:
+        warnings.append("Instrumental has clipping.")
+    if _metric(instrumental, "silence_ratio") > 0.2:
+        warnings.append("Instrumental contains long silence.")
+    rms = instrumental.get("rms_dbfs")
+    if rms is not None and float(rms) < -30:
+        warnings.append("Instrumental is very quiet.")
+    return {
+        "ok": not warnings,
+        "instrumental": instrumental,
+        "reference": reference,
+        "warnings": warnings,
+        "recommendations_zh": _instrumental_fit_recommendations_zh(warnings, bool(reference.get("exists"))),
+    }
+
+
+def _instrumental_fit_recommendations_zh(warnings: list[str], has_reference: bool) -> list[str]:
+    if not warnings and has_reference:
+        return ["外部伴奏和当前 mix 的基础参数匹配，可以继续试听或封装。"]
+    if not warnings:
+        return ["外部伴奏已转成 WAV；当前没有 mix.wav，建议先抽取源音轨再比较时长。"]
+    recommendations = []
+    for warning in warnings:
+        if "Duration" in warning:
+            recommendations.append("外部伴奏时长和原混不一致；封装前请试听开头、副歌和结尾是否漂移。")
+        elif "Sample rate" in warning or "Channel" in warning:
+            recommendations.append("外部伴奏参数和原混不同；系统已转 WAV，但建议重新导入或归一化后再封装。")
+        elif "clipping" in warning:
+            recommendations.append("外部伴奏有爆音；建议先降低音量或重新导出。")
+        elif "silence" in warning:
+            recommendations.append("外部伴奏有较长静音；请确认文件是否正确。")
+        elif "quiet" in warning:
+            recommendations.append("外部伴奏音量偏小；建议运行 Normalize 或换一个版本。")
+        else:
+            recommendations.append("外部伴奏需要人工试听确认。")
+    return list(dict.fromkeys(recommendations))
+
+
 def mkv_audit_report(
     info: dict[str, Any],
     *,

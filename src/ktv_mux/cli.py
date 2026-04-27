@@ -16,9 +16,12 @@ from .library import delete_song, import_inbox, rename_song, song_summary, updat
 from .paths import LibraryPaths
 from .pipeline import Pipeline
 from .planner import next_actions
+from .preflight import song_preflight
+from .recipes import RECIPE_STAGES
 from .separation_presets import PRESETS
 from .settings import load_settings, save_settings
 from .storage import library_storage_report, song_storage_report
+from .track_roles import TRACK_ROLES
 from .versions import delete_take, list_takes, set_current_take, update_take
 
 
@@ -55,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     next_p = sub.add_parser("next", help="show suggested next actions for a song")
     next_p.add_argument("song_id")
+
+    preflight_p = sub.add_parser(
+        "preflight",
+        help="check whether a song is ready for sample review, instrumental review, replace-audio, or final MKV",
+    )
+    preflight_p.add_argument("song_id")
 
     probe_p = sub.add_parser("probe", help="probe source media")
     probe_p.add_argument("song_id")
@@ -95,6 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
     set_instrumental_p.add_argument("song_id")
     set_instrumental_p.add_argument("audio_path")
     set_instrumental_p.add_argument("--label", default="external instrumental")
+    set_instrumental_p.add_argument("--offset", type=float, default=0.0, help="positive delays audio; negative trims start")
+    set_instrumental_p.add_argument("--gain-db", type=float, default=0.0, help="apply gain before review/mux")
+    set_instrumental_p.add_argument("--fit-to-mix", action="store_true", help="pad/trim to match mix.wav duration")
+    set_instrumental_p.add_argument("--normalize", action="store_true", help="apply loudness normalization while importing")
+
+    track_role_p = sub.add_parser("track-role", help="save a manual role label for a source audio track")
+    track_role_p.add_argument("song_id")
+    track_role_p.add_argument("--audio-index", type=int, required=True)
+    track_role_p.add_argument("--role", required=True, choices=TRACK_ROLES)
+    track_role_p.add_argument("--note", default="")
 
     normalize_p = sub.add_parser("normalize", help="create a loudness-normalized instrumental WAV")
     normalize_p.add_argument("song_id")
@@ -131,6 +150,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mux_p.add_argument("--duration-limit", type=float, default=None, help="mux only the first N seconds")
 
+    mux_plan_p = sub.add_parser("mux-plan", help="preview final KTV MKV track order before muxing")
+    mux_plan_p.add_argument("song_id")
+    mux_plan_p.add_argument("--audio-order", default="instrumental-first", choices=["instrumental-first", "original-first"])
+
     replace_p = sub.add_parser(
         "replace-audio",
         help="create an MKV with source video, original Track 1, and generated instrumental as Track 2",
@@ -148,6 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not copy source subtitle streams",
     )
     replace_p.add_argument("--duration-limit", type=float, default=None, help="mux only the first N seconds")
+
+    replace_plan_p = sub.add_parser("replace-plan", help="preview audio-replaced MKV track order before muxing")
+    replace_plan_p.add_argument("song_id")
+    replace_plan_p.add_argument("--keep-audio-index", type=int, default=0)
+    replace_plan_p.add_argument("--no-copy-subtitles", action="store_true")
 
     remake_p = sub.add_parser("remake-track", help="extract one source track, remake accompaniment, and replace audio")
     remake_p.add_argument("song_id")
@@ -248,7 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple", "lrc"])
 
     batch_stage_p = sub.add_parser("batch-stage", help="run one stage for every raw song folder")
-    batch_stage_p.add_argument("stage", choices=["probe", "preview-tracks", "extract", "separate"])
+    batch_stage_p.add_argument("stage", choices=["probe", "preview-tracks", "extract", "separate", "separate-sample"])
     batch_stage_p.add_argument("--root", default=None, help="raw root, defaults to library/raw")
     batch_stage_p.add_argument("--audio-index", type=int, default=0)
     batch_stage_p.add_argument("--start", type=float, default=0.0)
@@ -263,6 +291,23 @@ def build_parser() -> argparse.ArgumentParser:
     batch_stage_p.add_argument("--skip-completed", action="store_true")
     batch_stage_p.add_argument("--stop-on-error", action="store_true")
     batch_stage_p.add_argument("--dry-run", action="store_true")
+
+    batch_recipe_p = sub.add_parser("batch-recipe", help="run a saved multi-stage recipe for every raw song folder")
+    batch_recipe_p.add_argument("recipe", choices=sorted(RECIPE_STAGES))
+    batch_recipe_p.add_argument("--root", default=None, help="raw root, defaults to library/raw")
+    batch_recipe_p.add_argument("--audio-index", type=int, default=0)
+    batch_recipe_p.add_argument("--keep-audio-index", type=int, default=0)
+    batch_recipe_p.add_argument("--start", type=float, default=0.0)
+    batch_recipe_p.add_argument("--duration", type=float, default=20.0)
+    batch_recipe_p.add_argument("--count", type=int, default=1)
+    batch_recipe_p.add_argument("--spacing", type=float, default=45.0)
+    batch_recipe_p.add_argument("--separation-preset", default="balanced", choices=sorted(PRESETS))
+    batch_recipe_p.add_argument("--model", default="htdemucs")
+    batch_recipe_p.add_argument("--device", default="auto", choices=["auto", "cpu", "mps", "cuda"])
+    batch_recipe_p.add_argument("--align-backend", default="auto", choices=["auto", "funasr", "simple", "lrc"])
+    batch_recipe_p.add_argument("--audio-order", default="instrumental-first", choices=["instrumental-first", "original-first"])
+    batch_recipe_p.add_argument("--duration-limit", type=float, default=None)
+    batch_recipe_p.add_argument("--dry-run", action="store_true")
 
     status_p = sub.add_parser("status", help="show song status")
     status_p.add_argument("song_id")
@@ -312,6 +357,8 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
         return [song_summary(library, song_id) for song_id in library.list_song_ids()]
     if args.command == "next":
         return next_actions(library, args.song_id)
+    if args.command == "preflight":
+        return song_preflight(library, args.song_id)
     if args.command == "probe":
         info = pipeline.probe(args.song_id)
         return {
@@ -340,12 +387,25 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
             start=args.start,
             duration=args.duration,
             preset=args.preset,
-            separation_preset=args.separation_preset,
             model=args.model,
             device=args.device,
         )
     if args.command == "set-instrumental":
-        return {"instrumental_wav": str(pipeline.set_instrumental(args.song_id, Path(args.audio_path), label=args.label))}
+        return {
+            "instrumental_wav": str(
+                pipeline.set_instrumental(
+                    args.song_id,
+                    Path(args.audio_path),
+                    label=args.label,
+                    offset=args.offset,
+                    gain_db=args.gain_db,
+                    fit_to_mix=args.fit_to_mix,
+                    normalize=args.normalize,
+                )
+            )
+        }
+    if args.command == "track-role":
+        return pipeline.set_track_role(args.song_id, audio_index=args.audio_index, role=args.role, note=args.note)
     if args.command == "normalize":
         return {
             "normalized_wav": str(
@@ -383,6 +443,8 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
                 pipeline.mux(args.song_id, audio_order=args.audio_order, duration_limit=args.duration_limit)
             )
         }
+    if args.command == "mux-plan":
+        return pipeline.mux_plan(args.song_id, audio_order=args.audio_order)
     if args.command == "replace-audio":
         return {
             "audio_replaced_mkv": str(
@@ -394,6 +456,12 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
                 )
             )
         }
+    if args.command == "replace-plan":
+        return pipeline.replace_audio_plan(
+            args.song_id,
+            keep_audio_index=args.keep_audio_index,
+            copy_subtitles=not args.no_copy_subtitles,
+        )
     if args.command == "remake-track":
         return pipeline.remake_track(
             args.song_id,
@@ -505,12 +573,32 @@ def dispatch(args: argparse.Namespace, pipeline: Pipeline, library: LibraryPaths
             count=args.count,
             spacing=args.spacing,
             preset=args.preset,
+            separation_preset=args.separation_preset,
             model=args.model,
             device=args.device,
             limit=args.limit,
             skip_completed=args.skip_completed,
             stop_on_error=args.stop_on_error,
             dry_run=args.dry_run,
+        )
+    if args.command == "batch-recipe":
+        raw_root = Path(args.root) if args.root else None
+        return pipeline.batch_recipe(
+            args.recipe,
+            raw_root=raw_root,
+            dry_run=args.dry_run,
+            audio_index=args.audio_index,
+            keep_audio_index=args.keep_audio_index,
+            start=args.start,
+            duration=args.duration,
+            count=args.count,
+            spacing=args.spacing,
+            separation_preset=args.separation_preset,
+            model=args.model,
+            device=args.device,
+            align_backend=args.align_backend,
+            audio_order=args.audio_order,
+            duration_limit=args.duration_limit,
         )
     if args.command == "status":
         return {

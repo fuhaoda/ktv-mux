@@ -12,6 +12,8 @@ The first polished workflow is built around real KTV production:
 6. Listen before committing and inspect the quality report.
 7. Shift or edit ASS timing when needed.
 8. Build an audio-replaced MKV or a full KTV MKV with ASS lyrics.
+9. Run Preflight before committing to a replacement or final MKV.
+10. Use track roles, mux previews, and saved takes to make the replacement decision explicit.
 
 ## Quick Start
 
@@ -82,10 +84,28 @@ For a faster check before running the full song:
 ktv separate-sample 朋友-周华健 --audio-index 0 --start 45 --duration 30
 ```
 
+The sample output is also saved as a review take:
+
+```text
+library/output/朋友-周华健/instrumental.sample.wav
+library/output/朋友-周华健/takes/instrumental.sample.*.wav
+```
+
 If you already have a good accompaniment from another tool:
 
 ```bash
-ktv set-instrumental 朋友-周华健 /path/to/instrumental.wav --label "manual candidate"
+ktv set-instrumental 朋友-周华健 /path/to/instrumental.wav --label "manual candidate" --fit-to-mix --offset 0.15 --gain-db -1.5
+ktv preflight 朋友-周华健
+```
+
+External accompaniment files are rendered to `instrumental.wav` as 44.1 kHz stereo PCM WAV. They can be delayed, trimmed with a negative offset, gain-adjusted, normalized, and fitted to `mix.wav` length before muxing. If `mix.wav` already exists, the report records duration, channel, sample-rate, clipping, silence, and volume-fit warnings.
+
+Before muxing, preview the exact track order:
+
+```bash
+ktv track-role 朋友-周华健 --audio-index 0 --role guide-vocal --note "keep original guide"
+ktv mux-plan 朋友-周华健
+ktv replace-plan 朋友-周华健 --keep-audio-index 0
 ```
 
 Output:
@@ -102,14 +122,18 @@ ktv import-many FILE1 FILE2
 ktv metadata SONG_ID --title "Title" --artist "Artist"
 ktv metadata SONG_ID --tags "duet,needs-review" --rating 4
 ktv rename OLD_SONG_ID NEW_SONG_ID
+ktv preflight SONG_ID
 ktv probe SONG_ID
 ktv preview-tracks SONG_ID [--start SECONDS] [--duration SECONDS] [--count 3] [--preset chorus]
 ktv extract SONG_ID --audio-index 0
 ktv separate SONG_ID [--preset balanced|fast-review|clean-vocal|quality] [--model htdemucs] [--device auto]
 ktv separate-sample SONG_ID --audio-index 0 [--start 45] [--duration 30]
-ktv set-instrumental SONG_ID AUDIO_PATH [--label "external"]
+ktv set-instrumental SONG_ID AUDIO_PATH [--label "external"] [--offset 0.0] [--gain-db 0.0] [--fit-to-mix] [--normalize]
+ktv track-role SONG_ID --audio-index 0 --role guide-vocal|instrumental|duet|commentary|unknown
 ktv normalize SONG_ID [--target-i -16] [--replace-current]
+ktv mux-plan SONG_ID [--audio-order instrumental-first|original-first]
 ktv replace-audio SONG_ID --keep-audio-index 0 [--duration-limit SECONDS]
+ktv replace-plan SONG_ID --keep-audio-index 0
 ktv remake-track SONG_ID --audio-index 0 --keep-audio-index 0
 ktv lyrics SONG_ID lyrics.txt
 ktv extract-subtitles SONG_ID [--subtitle-index 0]
@@ -130,7 +154,8 @@ ktv storage [SONG_ID]
 ktv next SONG_ID
 ktv jobs
 ktv jobs-prune
-ktv batch-stage probe|preview-tracks|extract|separate [--dry-run] [--skip-completed] [--limit N]
+ktv batch-stage probe|preview-tracks|extract|separate|separate-sample [--dry-run] [--skip-completed] [--limit N]
+ktv batch-recipe instrumental-review|full-instrumental|replace-track2|final-ktv [--dry-run]
 ktv settings [--preview-start 30 --preview-duration 20 --preview-count 2 --demucs-device mps]
 ktv delete SONG_ID
 ktv status SONG_ID
@@ -195,4 +220,9 @@ scripts/smoke_e2e.sh
 - Generated media under `library/` is ignored by git.
 - Only process media you have the right to use.
 - URL downloads require rights confirmation in the Web UI; the project does not implement DRM bypass or copyright-evasion workflows.
+- The song page starts with task modes for common workflows: only make an instrumental, replace a bad Track 2, use existing lyrics, use an external instrumental, build the final MKV, or export a support package.
+- The advanced song workbench is collapsed by default; task modes are the first-screen workflow.
+- Source audio tracks can be manually labeled by role, and mux preview panels show final track order before writing MKV files.
+- Batch recipes combine common multi-stage flows such as instrumental review, full instrumental creation, Track 2 replacement, and final KTV generation.
+- The Preflight panel and `ktv preflight` report whether a song is ready for sample review, instrumental review, audio replacement, or final MKV muxing.
 - Product scope and non-goals are tracked in `docs/ROADMAP.md`.

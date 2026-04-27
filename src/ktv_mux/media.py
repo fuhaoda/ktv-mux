@@ -177,6 +177,98 @@ def extract_subtitle(
     return output_path
 
 
+def build_render_audio_wav_cmd(
+    input_audio: Path,
+    output_wav: Path,
+    *,
+    offset: float = 0.0,
+    target_duration: float | None = None,
+    gain_db: float = 0.0,
+    normalize: bool = False,
+) -> list[str]:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+    ]
+    if offset < 0:
+        cmd.extend(["-ss", f"{abs(offset):.3f}"])
+    cmd.extend(
+        [
+            "-i",
+            str(input_audio),
+            "-vn",
+        ]
+    )
+    filters = _render_audio_filters(
+        offset=offset,
+        target_duration=target_duration,
+        gain_db=gain_db,
+        normalize=normalize,
+    )
+    if filters:
+        cmd.extend(["-af", ",".join(filters)])
+    cmd.extend(
+        [
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            "-c:a",
+            "pcm_s16le",
+            str(output_wav),
+        ]
+    )
+    return cmd
+
+
+def render_audio_wav(
+    input_audio: Path,
+    output_wav: Path,
+    *,
+    offset: float = 0.0,
+    target_duration: float | None = None,
+    gain_db: float = 0.0,
+    normalize: bool = False,
+    cancel_file: Path | None = None,
+) -> Path:
+    require_command("ffmpeg")
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    run_command(
+        build_render_audio_wav_cmd(
+            input_audio,
+            output_wav,
+            offset=offset,
+            target_duration=target_duration,
+            gain_db=gain_db,
+            normalize=normalize,
+        ),
+        cancel_file=cancel_file,
+    )
+    return output_wav
+
+
+def _render_audio_filters(
+    *,
+    offset: float = 0.0,
+    target_duration: float | None = None,
+    gain_db: float = 0.0,
+    normalize: bool = False,
+) -> list[str]:
+    filters: list[str] = []
+    if offset > 0:
+        delay_ms = int(round(offset * 1000))
+        filters.append(f"adelay={delay_ms}:all=1")
+    if target_duration is not None and target_duration > 0:
+        filters.append(f"apad=whole_dur={target_duration:.3f}")
+        filters.append(f"atrim=duration={target_duration:.3f}")
+    if abs(gain_db) > 0.001:
+        filters.append(f"volume={gain_db:.3f}dB")
+    if normalize:
+        filters.append("loudnorm=I=-16.0:TP=-1.5:LRA=11.0")
+    return filters
+
+
 def detect_torch_device() -> str | None:
     try:
         import torch  # type: ignore

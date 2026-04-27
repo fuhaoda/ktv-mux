@@ -98,6 +98,8 @@ def set_current_take(library: LibraryPaths, song_id: str, filename: str) -> Path
 
 
 def take_kind(filename: str) -> str:
+    if ".sample." in filename or filename.startswith("instrumental.sample"):
+        return "instrumental-sample"
     if filename.endswith(".wav"):
         return "instrumental"
     if ".audio-replaced." in filename:

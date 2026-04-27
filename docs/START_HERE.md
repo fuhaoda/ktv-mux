@@ -61,12 +61,15 @@ Web:
 2. Click **Read Tracks**.
 3. Click **Build Previews**.
 4. Listen to each track preview in **Source Tracks**.
+5. Save a role for each track, for example guide vocal or instrumental.
 
 CLI:
 
 ```bash
 .venv/bin/ktv probe 朋友-周华健
 .venv/bin/ktv preview-tracks 朋友-周华健 --preset chorus --count 2 --duration 12
+.venv/bin/ktv track-role 朋友-周华健 --audio-index 0 --role guide-vocal --note "original guide"
+.venv/bin/ktv track-role 朋友-周华健 --audio-index 1 --role instrumental --note "existing backing candidate"
 ```
 
 Web `Track 1` is CLI `--audio-index 0`; Web `Track 2` is CLI `--audio-index 1`.
@@ -78,8 +81,9 @@ Web:
 1. Choose the source track in **Extract Audio**.
 2. Click **Extract**.
 3. Click **Try Segment** first if you only want a 30-second test.
-4. Click **Make Stem** for the full song.
-5. Listen to `Instrumental` in **Audio Preview**.
+4. Listen to `Sample Instrumental`.
+5. Click **Make Stem** for the full song only if the sample is acceptable.
+6. Listen to `Instrumental` in **Audio Preview**.
 
 CLI:
 
@@ -87,6 +91,7 @@ CLI:
 .venv/bin/ktv extract 朋友-周华健 --audio-index 0
 .venv/bin/ktv separate-sample 朋友-周华健 --audio-index 0 --start 45 --duration 30
 .venv/bin/ktv separate 朋友-周华健 --preset balanced --device auto
+.venv/bin/ktv preflight 朋友-周华健
 ```
 
 Output:
@@ -94,21 +99,26 @@ Output:
 ```text
 library/output/朋友-周华健/instrumental.wav
 library/output/朋友-周华健/instrumental.sample.wav
+library/output/朋友-周华健/takes/
 ```
 
 ### I Already Have A Good Instrumental
 
 Web:
 
-1. Open **Subtitle Workbench**.
-2. Use **Use External Instrumental**.
-3. The uploaded file becomes the current `instrumental.wav`.
+1. Use the **I Already Have Instrumental** task card, or open **Advanced Workbench**.
+2. Upload the audio file.
+3. If needed, set offset seconds, gain dB, fit-to-mix, or normalize.
+4. The uploaded file becomes the current `instrumental.wav`.
 
 CLI:
 
 ```bash
-.venv/bin/ktv set-instrumental 朋友-周华健 /path/to/instrumental.wav --label "manual candidate"
+.venv/bin/ktv set-instrumental 朋友-周华健 /path/to/instrumental.wav --label "manual candidate" --fit-to-mix --offset 0.10 --gain-db -1.5
+.venv/bin/ktv preflight 朋友-周华健
 ```
+
+The imported accompaniment is rendered to `instrumental.wav` as WAV and checked against `mix.wav` when available.
 
 ### Track 2 Is Bad And I Want To Replace It
 
@@ -116,12 +126,14 @@ Web:
 
 1. Use **Sample Separate** first.
 2. If the sample is acceptable, use **Remake Track** or **Replace Track 2**.
-3. Check **Outputs** and play the audio-replaced MKV in the browser.
+3. Check **Mux Preview** before writing the MKV.
+4. Check **Outputs** and play the audio-replaced MKV in the browser.
 
 CLI:
 
 ```bash
 .venv/bin/ktv remake-track 朋友-周华健 --audio-index 0 --keep-audio-index 0
+.venv/bin/ktv replace-plan 朋友-周华健 --keep-audio-index 0
 ```
 
 Output:
@@ -181,6 +193,8 @@ CLI:
 
 ```bash
 .venv/bin/ktv mux 朋友-周华健
+.venv/bin/ktv preflight 朋友-周华健
+.venv/bin/ktv mux-plan 朋友-周华健
 ```
 
 Output:
@@ -217,6 +231,13 @@ For development verification:
 .venv/bin/python -m ruff check .
 .venv/bin/python -m pytest -q
 scripts/smoke_e2e.sh
+```
+
+Batch dry-run before expensive work:
+
+```bash
+.venv/bin/ktv batch-recipe instrumental-review --dry-run
+.venv/bin/ktv batch-stage separate-sample --dry-run
 ```
 
 ## 7. Product Boundary

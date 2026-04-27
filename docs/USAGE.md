@@ -83,11 +83,21 @@ Use `--preset chorus` when you want preview clips around the middle/chorus area 
 ktv preview-tracks 朋友-周华健 --preset chorus --count 3 --duration 12
 ```
 
+Persist manual roles after listening:
+
+```bash
+ktv track-role 朋友-周华健 --audio-index 0 --role guide-vocal --note "original guide"
+ktv track-role 朋友-周华健 --audio-index 1 --role instrumental --note "existing backing, but weak"
+```
+
+Roles are written to `report.json` and appear in the Web Source Tracks panel. They are decision support; FFmpeg stream indexes still come from the actual source file.
+
 ## Replace Track 2 With A Generated Instrumental
 
 After `separate` creates `instrumental.wav`:
 
 ```bash
+ktv replace-plan 朋友-周华健 --keep-audio-index 0
 ktv replace-audio 朋友-周华健 --keep-audio-index 0
 ```
 
@@ -123,6 +133,17 @@ library/output/朋友-周华健/takes/
 
 The Web detail page shows playable audio, recent job state, the Demucs log link, track previews, editable versioned takes, waveform/timeline subtitle editing, and WAV level metrics including clipping, silence ratio, and recommendations.
 
+For A/B listening, use the song page's A/B Review panel. It can sync visible players to the same timestamp so you can compare the original mix, current instrumental, and saved instrumental takes around the same lyric or chorus.
+
+If you already have an accompaniment from another tool:
+
+```bash
+ktv set-instrumental 朋友-周华健 path/to/accompaniment.mp3 --label "external take" --fit-to-mix --offset 0.10 --gain-db -1.5
+ktv preflight 朋友-周华健
+```
+
+The file is rendered to `instrumental.wav` as 44.1 kHz stereo PCM WAV. Positive `--offset` delays the external accompaniment, negative `--offset` trims the beginning, `--gain-db` adjusts level, `--fit-to-mix` pads/trims to `mix.wav` duration, and `--normalize` applies loudness normalization during import. If `mix.wav` exists, `report.json` and the Web Preflight panel show duration, sample-rate, channel, clipping, silence, and volume-fit warnings.
+
 CLI take management:
 
 ```bash
@@ -131,6 +152,8 @@ ktv take-note 朋友-周华健 instrumental.20260425T010101Z.wav --label "good t
 ktv take-current 朋友-周华健 instrumental.20260425T010101Z.wav
 ktv take-delete 朋友-周华健 instrumental.20260425T010101Z.wav
 ```
+
+Short sample separations also create saved sample takes, so you can compare multiple source tracks and presets before running a full song.
 
 Export a review package:
 
@@ -157,6 +180,13 @@ ktv align 朋友-周华健 --backend simple
 ktv shift 朋友-周华健 --seconds 0.25
 ktv edit-line 朋友-周华健 --index 0 --start 8.5 --end 11.2 --text "朋友一生一起走"
 ktv mux 朋友-周华健
+```
+
+Preview the final track order first:
+
+```bash
+ktv mux-plan 朋友-周华健 --audio-order instrumental-first
+ktv mux-plan 朋友-周华健 --audio-order original-first
 ```
 
 If your lyrics file is timestamped `.lrc`, upload or save it with `ktv lyrics`, then use:
@@ -210,6 +240,7 @@ Next-action hints:
 
 ```bash
 ktv next 朋友-周华健
+ktv preflight 朋友-周华健
 ```
 
 Batch import local files:
@@ -225,9 +256,22 @@ ktv batch-stage probe
 ktv batch-stage preview-tracks --preset chorus --count 2
 ktv batch-stage extract --audio-index 0
 ktv batch-stage separate --model htdemucs --device auto
+ktv batch-stage separate-sample --audio-index 0 --start 45 --duration 30 --separation-preset fast-review
 ktv batch-stage probe --dry-run
 ktv batch-stage separate --skip-completed --limit 5 --stop-on-error
 ```
+
+Batch common recipes:
+
+```bash
+ktv batch-recipe instrumental-review --dry-run
+ktv batch-recipe instrumental-review --audio-index 0 --separation-preset fast-review
+ktv batch-recipe full-instrumental --audio-index 0 --separation-preset balanced
+ktv batch-recipe replace-track2 --audio-index 0 --keep-audio-index 0
+ktv batch-recipe final-ktv --audio-index 0 --align-backend lrc
+```
+
+Recipes are intentionally thin wrappers over separate stages. Use `--dry-run` first, then run the individual stage commands if one song needs different parameters.
 
 Resume the main pipeline from a specific point:
 

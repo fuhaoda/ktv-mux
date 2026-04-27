@@ -147,3 +147,63 @@ This pass addressed the strict 30-point module-level product review.
 28. Kept v1 dependency boundaries: no Node frontend and no MKVToolNix requirement.
 29. Documented modular CLI usage in the README.
 30. Added an acceptance checklist for manual and automated release verification.
+
+## Strict Product Engineering Pass
+
+This pass implemented the follow-up 30-point hardening review with emphasis on independent modules and real user workflows.
+
+1. Fixed the `ktv separate-sample` CLI dispatch bug where `--preset` was parsed but `args.separation_preset` was read.
+2. Added CLI contract tests so every subcommand exposes help and `separate-sample` dispatch is covered.
+3. Added `ktv preflight SONG_ID` for standalone readiness checks.
+4. Added a reusable preflight module shared by CLI and Web.
+5. Added Web Task Modes for instrumental-only, bad Track 2 replacement, existing lyrics, external instrumental, final MKV, and support package workflows.
+6. Added a Preflight panel showing readiness for sample review, instrumental review, replace-audio, and final MKV.
+7. Added warning aggregation from quality reports, sample reports, external instrumental fit reports, and MKV audits into Preflight.
+8. Added explicit track decision badges for source default, selected separation source, kept guide track, and last remake source.
+9. Added visible CLI `--audio-index` mapping beside each Web track.
+10. Added fast-review defaults to per-track sample separation actions.
+11. Added synchronized A/B review controls for visible mix, instrumental, and instrumental-take players.
+12. Added external instrumental transcoding to 44.1 kHz stereo PCM WAV instead of byte-copying arbitrary audio into `instrumental.wav`.
+13. Added external instrumental fit reports against `mix.wav` when available.
+14. Added fit warnings for duration mismatch, sample-rate mismatch, channel mismatch, clipping, long silence, and very quiet audio.
+15. Added Chinese fit recommendations for external accompaniment review.
+16. Added media command tests for external audio WAV rendering.
+17. Added quality tests for external instrumental fit analysis.
+18. Updated Web upload tests to use a real tiny WAV and confirm fit-report persistence.
+19. Added batch support for `batch-stage separate-sample`.
+20. Fixed CLI forwarding for `batch-stage --separation-preset`.
+21. Added pipeline tests proving `batch-stage separate-sample` passes audio index, timing, preset, and device.
+22. Added failure playbooks with concrete next actions by failed stage.
+23. Added mobile layout hardening for tables, task cards, rows, buttons, and top navigation.
+24. Added browser regression checks for mobile page overflow on Home, Doctor, and song detail pages.
+25. Added responsive table behavior so dense diagnostic/history/library tables do not expand the page width.
+26. Updated README with `preflight`, external instrumental rendering, task modes, and batch sample separation.
+27. Updated Start Here with `preflight` checks in instrumental, external-accompaniment, and mux flows.
+28. Updated Acceptance with Task Modes, Preflight, external accompaniment fit, and mobile overflow checks.
+29. Kept Node-free Web UI while adding richer browser behavior through the existing static JS file.
+30. Preserved local-first and rights-confirmed boundaries while tightening module-level workflows.
+
+## Product Engineering Closeout Pass
+
+This pass implemented the follow-up 20-point product plan with emphasis on task-first UX, track decisions, mux safety, and maintainability.
+
+1. Split the oversized server-rendered UI into `views.py`, `view_common.py`, `view_song.py`, and `view_admin.py`.
+2. Split pipeline support helpers into `pipeline_support.py` so locks, validation, output discovery, and take archiving are isolated.
+3. Collapsed the dense song workbench behind an Advanced Workbench disclosure so task cards remain the first-screen experience.
+4. Added source audio track roles with manual `ktv track-role` persistence and Web Source Track controls.
+5. Added inferred role hints for default tracks, karaoke/instrumental titles, and likely KTV second-track accompaniments.
+6. Added `ktv mux-plan` and `ktv replace-plan` so final audio/subtitle order can be reviewed before writing MKVs.
+7. Added a Web Mux Preview panel for final KTV and Track 2 replacement outputs.
+8. Added external accompaniment offset, gain, fit-to-mix, and normalize controls in CLI and Web upload.
+9. Added sample instrumental take archiving so short separation experiments are preserved for comparison.
+10. Distinguished `instrumental-sample` takes from full instrumental takes.
+11. Prevented sample takes from showing unsupported "Set Current" actions.
+12. Expanded the subtitle timing editor from the first 24 lines to all aligned lines.
+13. Added batch recipes for `instrumental-review`, `full-instrumental`, `replace-track2`, and `final-ktv`.
+14. Added Web Batch Console recipe dry-run and queue controls.
+15. Added CLI tests for external accompaniment fit options, track roles, mux plans, replace plans, and batch recipes.
+16. Added media command tests for offset/gain/normalize render filters.
+17. Added product-model tests for track role inference, mux plans, sample take kinds, and recipe dry-runs.
+18. Updated README, Usage, Start Here, Architecture, and Acceptance docs for the new module workflows.
+19. Preserved the old `ktv_mux.views` import surface while moving implementation into smaller modules.
+20. Re-ran targeted tests after each structural pass before proceeding to full validation.

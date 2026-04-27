@@ -7,6 +7,7 @@ from ktv_mux.jsonio import write_json
 from ktv_mux.library import save_lyrics_file
 from ktv_mux.output_templates import render_output_filename
 from ktv_mux.paths import LibraryPaths
+from ktv_mux.pipeline import Pipeline
 from ktv_mux.planner import next_actions
 from ktv_mux.settings import load_settings, save_settings
 from ktv_mux.storage import library_storage_report, song_storage_report
@@ -136,3 +137,30 @@ def test_save_lyrics_file_imports_srt_alignment(tmp_path):
     alignment = json.loads(library.alignment_json("song").read_text(encoding="utf-8"))
     assert alignment["backend"] == "srt"
     assert library.lyrics_ass("song").exists()
+
+
+def test_batch_stage_supports_separate_sample(monkeypatch, tmp_path):
+    library = LibraryPaths(tmp_path / "library")
+    library.ensure_song_dirs("song")
+    calls = []
+
+    def fake_separate_sample(self, song_id, **params):
+        calls.append((song_id, params))
+        return {"sample": True}
+
+    monkeypatch.setattr(Pipeline, "separate_sample", fake_separate_sample)
+
+    result = Pipeline(library).batch_stage(
+        "separate-sample",
+        audio_index=1,
+        start=3,
+        duration=8,
+        separation_preset="fast-review",
+        device="cpu",
+    )
+
+    assert result[0]["result"] == {"sample": True}
+    assert calls[0][0] == "song"
+    assert calls[0][1]["audio_index"] == 1
+    assert calls[0][1]["preset"] == "fast-review"
+    assert calls[0][1]["device"] == "cpu"

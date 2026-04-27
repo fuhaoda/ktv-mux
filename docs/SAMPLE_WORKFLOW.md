@@ -24,6 +24,8 @@ assets/朋友-周华健.mkv
 
 The song ID defaults to `朋友-周华健`.
 
+The song page opens with Task Modes. Use those shortcuts when you only want an instrumental, want to replace a bad Track 2, already have lyrics, or already have an external accompaniment.
+
 ## 3. Inspect Tracks
 
 Open the song page and run:
@@ -85,6 +87,12 @@ library/output/朋友-周华健/
 ```
 
 Each generated audio/MKV also gets a versioned copy under `takes/`, and `report.json` includes stream audits plus quality warnings.
+
+Before treating the file as finished, check the Preflight panel or run:
+
+```bash
+.venv/bin/ktv preflight 朋友-周华健
+```
 
 ## CLI Smoke
 

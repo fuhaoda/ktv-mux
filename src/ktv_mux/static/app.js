@@ -79,6 +79,21 @@
     });
   });
 
+  document.querySelectorAll("[data-sync-review]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var players = Array.prototype.slice.call(document.querySelectorAll("[data-sync-player]"));
+      if (!players.length) return;
+      var source = players.find(function (player) { return !player.paused; }) || players[0];
+      var current = Number(source.currentTime || 0);
+      players.forEach(function (player) {
+        if (player === source) return;
+        try {
+          player.currentTime = current;
+        } catch (error) {}
+      });
+    });
+  });
+
   document.addEventListener("keydown", function (event) {
     var active = document.activeElement;
     if (active && ["INPUT", "TEXTAREA", "SELECT"].indexOf(active.tagName) !== -1) return;

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import fcntl
 import shutil
-import threading
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -17,11 +14,11 @@ from .alignment import (
     update_alignment_lines,
 )
 from .ass import build_ass
-from .checkpoints import record_stage_checkpoint, stage_checkpoint_completed
+from .checkpoints import record_stage_checkpoint
 from .compatibility import compatibility_report
 from .errors import PipelineStateError
 from .jsonio import read_json, write_json
-from .library import import_source, load_song, save_lyrics_file
+from .library import load_song, save_lyrics_file, song_summary
 from .media import (
     extract_mix,
     extract_preview,
@@ -29,20 +26,36 @@ from .media import (
     mux_ktv,
     normalize_wav,
     probe_media,
+    render_audio_wav,
     replace_audio_track,
     run_demucs_two_stems,
 )
-from .models import Song, append_stage_status, update_report, utc_now
-from .output_templates import render_output_filename
+from .models import Song, append_stage_status, update_report
+from .mux_plan import ktv_mux_plan
+from .mux_plan import replace_audio_plan as build_replace_audio_plan
 from .paths import LibraryPaths, derive_song_id_from_source, normalize_song_id
-from .quality import mkv_audit_report, separation_quality_report
+from .pipeline_support import (
+    _archive_take,
+    _ass_style,
+    _checkpoint_has_outputs,
+    _copy_templated_output,
+    _import_and_report,
+    _optional_float,
+    _optional_int,
+    _preview_starts,
+    _probe_duration,
+    _stage_outputs,
+    _validate_audio_index,
+    _validate_probe_has_required_streams,
+    song_lock,
+)
+from .quality import instrumental_fit_report, mkv_audit_report, separation_quality_report
+from .recipes import RECIPE_STAGES, recipe_plan
 from .separation_presets import resolve_separation_preset
 from .settings import load_settings
-from .versions import record_take
+from .track_roles import set_track_role
 
 StageFunc = Callable[[], Any]
-_LOCKS_GUARD = threading.Lock()
-_SONG_LOCKS: dict[str, threading.Lock] = {}
 
 
 class Pipeline:
@@ -279,12 +292,31 @@ class Pipeline:
                     instrumental_wav=self.library.instrumental_sample_wav(clean_id),
                     vocals_wav=self.library.vocals_sample_wav(clean_id),
                 ),
+                instrumental_sample_take=str(
+                    _archive_take(
+                        self.library,
+                        clean_id,
+                        self.library.instrumental_sample_wav(clean_id),
+                        label=f"sample {duration:g}s from Track {audio_index + 1} / {result.get('preset_label')}",
+                    )
+                ),
             )
             return result
 
         return self._run_stage(clean_id, "separate-sample", stage)
 
-    def set_instrumental(self, song_id: str, source_path: Path, *, label: str = "external instrumental") -> Path:
+    def set_instrumental(
+        self,
+        song_id: str,
+        source_path: Path,
+        *,
+        label: str = "external instrumental",
+        offset: float = 0.0,
+        gain_db: float = 0.0,
+        fit_to_mix: bool = False,
+        normalize: bool = False,
+        cancel_file: Path | None = None,
+    ) -> Path:
         clean_id = normalize_song_id(song_id)
         source = Path(source_path).expanduser()
         if not source.exists():
@@ -293,18 +325,71 @@ class Pipeline:
         def stage() -> Path:
             target = self.library.instrumental_wav(clean_id)
             target.parent.mkdir(parents=True, exist_ok=True)
+            reference = self.library.mix_wav(clean_id)
+            target_duration = _probe_duration(reference) if fit_to_mix and reference.exists() else None
             if source.resolve() != target.resolve():
-                shutil.copy2(source, target)
+                render_audio_wav(
+                    source,
+                    target,
+                    offset=offset,
+                    target_duration=target_duration,
+                    gain_db=gain_db,
+                    normalize=normalize,
+                    cancel_file=cancel_file,
+                )
             take = _archive_take(self.library, clean_id, target, label=label)
             update_report(
                 self.library.report_json(clean_id),
                 instrumental_wav=str(target),
-                external_instrumental={"source": str(source), "label": label},
+                external_instrumental={
+                    "source": str(source),
+                    "label": label,
+                    "offset": offset,
+                    "gain_db": gain_db,
+                    "fit_to_mix": fit_to_mix,
+                    "target_duration": target_duration,
+                    "normalize": normalize,
+                },
+                external_instrumental_fit=instrumental_fit_report(
+                    reference_wav=reference if reference.exists() else None,
+                    instrumental_wav=target,
+                ),
                 instrumental_take=str(take),
             )
             return target
 
         return self._run_stage(clean_id, "set-instrumental", stage)
+
+    def set_track_role(self, song_id: str, *, audio_index: int, role: str, note: str = "") -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+
+        def stage() -> dict[str, Any]:
+            _validate_audio_index(self.library.source_path(clean_id), audio_index)
+            return set_track_role(self.library, clean_id, audio_index=audio_index, role=role, note=note)
+
+        return self._run_stage(clean_id, "track-role", stage)
+
+    def mux_plan(self, song_id: str, *, audio_order: str = "instrumental-first") -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        summary = song_summary(self.library, clean_id)
+        report = read_json(self.library.report_json(clean_id), default={}) or {}
+        plan = ktv_mux_plan(summary, report, audio_order=audio_order)
+        update_report(self.library.report_json(clean_id), planned_ktv_mux=plan)
+        return plan
+
+    def replace_audio_plan(
+        self,
+        song_id: str,
+        *,
+        keep_audio_index: int = 0,
+        copy_subtitles: bool = True,
+    ) -> dict[str, Any]:
+        clean_id = normalize_song_id(song_id)
+        summary = song_summary(self.library, clean_id)
+        report = read_json(self.library.report_json(clean_id), default={}) or {}
+        plan = build_replace_audio_plan(summary, report, keep_audio_index=keep_audio_index, copy_subtitles=copy_subtitles)
+        update_report(self.library.report_json(clean_id), planned_audio_replace=plan)
+        return plan
 
     def remake_track(
         self,
@@ -552,6 +637,11 @@ class Pipeline:
 
         def stage() -> Path:
             settings = load_settings(self.library)
+            plan = ktv_mux_plan(
+                song_summary(self.library, clean_id),
+                read_json(self.library.report_json(clean_id), default={}) or {},
+                audio_order=audio_order,
+            )
             result = mux_ktv(
                 source,
                 instrumental,
@@ -571,6 +661,7 @@ class Pipeline:
                 self.library.report_json(clean_id),
                 final_mkv=str(result),
                 audio_order=audio_order,
+                planned_ktv_mux=plan,
                 final_mkv_audit=audit,
                 compatibility=compatibility_report(audit),
                 templated_final_mkv=str(templated) if templated else None,
@@ -600,6 +691,12 @@ class Pipeline:
         def stage() -> Path:
             _validate_audio_index(source, keep_audio_index)
             settings = load_settings(self.library)
+            plan = build_replace_audio_plan(
+                song_summary(self.library, clean_id),
+                read_json(self.library.report_json(clean_id), default={}) or {},
+                keep_audio_index=keep_audio_index,
+                copy_subtitles=copy_subtitles,
+            )
             result = replace_audio_track(
                 source,
                 instrumental,
@@ -620,6 +717,7 @@ class Pipeline:
             update_report(
                 self.library.report_json(clean_id),
                 audio_replaced_mkv=str(result),
+                planned_audio_replace=plan,
                 audio_replaced_mkv_audit=audit,
                 audio_replaced_compatibility=compatibility_report(audit),
                 audio_replaced_mkv_take=str(_archive_take(self.library, clean_id, result)),
@@ -794,6 +892,16 @@ class Pipeline:
                         model=params.get("model"),
                         device=params.get("device"),
                     )
+                elif stage == "separate-sample":
+                    result = self.separate_sample(
+                        song_id,
+                        audio_index=int(params.get("audio_index", 0)),
+                        start=float(params.get("start", 0.0)),
+                        duration=float(params.get("duration", 30.0)),
+                        preset=str(params.get("separation_preset", params.get("preset", "fast-review"))),
+                        model=params.get("model"),
+                        device=params.get("device"),
+                    )
                 else:
                     raise PipelineStateError(f"Unsupported batch stage: {stage}")
                 results.append({"song_id": song_id, "stage": stage, "result": result})
@@ -805,6 +913,75 @@ class Pipeline:
                 if stop_on_error:
                     break
         return results
+
+    def batch_recipe(self, recipe: str, *, raw_root: Path | None = None, dry_run: bool = False, **params: Any) -> dict[str, Any]:
+        root = raw_root or self.library.raw_root
+        song_ids = [normalize_song_id(path.name) for path in sorted(root.iterdir()) if path.is_dir()] if root.exists() else []
+        if recipe not in RECIPE_STAGES:
+            raise PipelineStateError(f"Unsupported batch recipe: {recipe}")
+        plan = recipe_plan(recipe, song_ids=song_ids)
+        if dry_run:
+            return {**plan, "dry_run": True, "results": []}
+        results = []
+        for song_id in song_ids:
+            song_result: dict[str, Any] = {"song_id": song_id, "stages": []}
+            for stage in RECIPE_STAGES[recipe]:
+                try:
+                    song_result["stages"].append({"stage": stage, "result": self._run_recipe_stage(song_id, stage, params)})
+                except Exception as exc:
+                    update_report(self.library.report_json(song_id), failure=str(exc), failed_stage=stage)
+                    song_result["stages"].append({"stage": stage, "error": str(exc)})
+                    break
+            results.append(song_result)
+        return {**plan, "dry_run": False, "results": results}
+
+    def _run_recipe_stage(self, song_id: str, stage: str, params: dict[str, Any]) -> Any:
+        if stage == "probe":
+            return self.probe(song_id)
+        if stage == "preview-tracks":
+            return self.preview_tracks(
+                song_id,
+                duration=float(params.get("duration", 20.0)),
+                start=float(params.get("start", 0.0)),
+                count=int(params.get("count", 1)),
+                spacing=float(params.get("spacing", 45.0)),
+                preset=str(params.get("preview_preset", params.get("preset", "manual"))),
+            )
+        if stage == "extract":
+            return self.extract(song_id, audio_index=int(params.get("audio_index", 0)))
+        if stage == "separate":
+            return self.separate(
+                song_id,
+                preset=str(params.get("separation_preset", "balanced")),
+                model=params.get("model"),
+                device=params.get("device"),
+            )
+        if stage == "separate-sample":
+            return self.separate_sample(
+                song_id,
+                audio_index=int(params.get("audio_index", 0)),
+                start=float(params.get("start", 0.0)),
+                duration=float(params.get("sample_duration", params.get("duration", 30.0))),
+                preset=str(params.get("separation_preset", "fast-review")),
+                model=params.get("model"),
+                device=params.get("device"),
+            )
+        if stage == "replace-audio":
+            return self.replace_audio(
+                song_id,
+                keep_audio_index=int(params.get("keep_audio_index", 0)),
+                copy_subtitles=bool(params.get("copy_subtitles", True)),
+                duration_limit=_optional_float(params.get("duration_limit")),
+            )
+        if stage == "align":
+            return self.align(song_id, backend=str(params.get("align_backend", "auto")))
+        if stage == "mux":
+            return self.mux(
+                song_id,
+                audio_order=str(params.get("audio_order", "instrumental-first")),
+                duration_limit=_optional_float(params.get("duration_limit")),
+            )
+        raise PipelineStateError(f"Unsupported recipe stage: {stage}")
 
     def _run_stage(self, song_id: str, stage_name: str, func: StageFunc) -> Any:
         clean_id = normalize_song_id(song_id)
@@ -860,188 +1037,3 @@ class Pipeline:
         if not path.exists():
             raise PipelineStateError(f"{message} Missing: {path}")
         return path
-
-
-def _probe_duration(path: Path) -> float:
-    info = probe_media(path)
-    return float(info.get("duration") or 0.0)
-
-
-def _preview_starts(
-    media_duration: Any,
-    *,
-    start: float,
-    count: int,
-    spacing: float,
-    preset: str,
-) -> list[float]:
-    duration = float(media_duration or 0.0)
-    base = max(0.0, float(start or 0.0))
-    if preset == "chorus" and duration > 0:
-        base = max(0.0, duration * 0.4)
-    total = max(1, int(count or 1))
-    gap = max(1.0, float(spacing or 45.0))
-    starts = []
-    for index in range(total):
-        candidate = base + index * gap
-        if duration > 0:
-            candidate = min(candidate, max(0.0, duration - 1.0))
-        starts.append(round(candidate, 3))
-    return starts
-
-
-def _stage_outputs(library: LibraryPaths, song_id: str, stage: str) -> list[Path]:
-    if stage == "import":
-        return library.source_candidates(song_id)
-    if stage == "probe":
-        return [library.report_json(song_id)]
-    if stage == "extract":
-        return [library.mix_wav(song_id)]
-    if stage == "preview-tracks":
-        return sorted(library.previews_dir(song_id).glob("track-*.wav"))
-    if stage == "separate":
-        return [library.instrumental_wav(song_id), library.vocals_wav(song_id)]
-    if stage == "separate-sample":
-        return [library.instrumental_sample_wav(song_id), library.vocals_sample_wav(song_id)]
-    if stage == "set-instrumental":
-        return [library.instrumental_wav(song_id)]
-    if stage == "extract-subtitles":
-        return [library.lyrics_txt(song_id), library.lyrics_ass(song_id)]
-    if stage in {"align", "shift-subtitles", "shift-subtitle-lines", "stretch-subtitle-lines", "edit-subtitles"}:
-        return [library.alignment_json(song_id), library.lyrics_ass(song_id)]
-    if stage == "mux":
-        return [library.final_mkv(song_id)]
-    if stage == "replace-audio":
-        return [library.audio_replaced_mkv(song_id)]
-    if stage == "normalize":
-        return [library.normalized_instrumental_wav(song_id)]
-    return []
-
-
-def _ass_style(library: LibraryPaths) -> dict[str, Any]:
-    settings = load_settings(library)
-    return {
-        "font_size": settings["subtitle_font_size"],
-        "margin_v": settings["subtitle_margin_v"],
-        "primary_colour": settings["subtitle_primary_colour"],
-        "secondary_colour": settings["subtitle_secondary_colour"],
-    }
-
-
-def _checkpoint_has_outputs(library: LibraryPaths, song_id: str, stage: str) -> bool:
-    return stage_checkpoint_completed(library, song_id, stage)
-
-
-def _optional_int(value: Any) -> int | None:
-    if value in {None, ""}:
-        return None
-    parsed = int(value)
-    return parsed if parsed > 0 else None
-
-
-def _import_and_report(
-    library: LibraryPaths,
-    path_or_url: str,
-    *,
-    song_id: str | None,
-    title: str | None,
-    artist: str | None,
-    cancel_file: Path | None,
-) -> Song:
-    clean_id = normalize_song_id(song_id) if song_id else derive_song_id_from_source(path_or_url)
-    song = import_source(
-        path_or_url,
-        song_id=song_id,
-        library=library,
-        title=title,
-        artist=artist,
-        log_path=library.stage_log(clean_id, "import"),
-        cancel_file=cancel_file,
-    )
-    update_report(
-        library.report_json(song.song_id),
-        imported_source=str(song.source_path),
-        import_input=path_or_url,
-        download_metadata=_download_metadata(library, song.song_id),
-    )
-    return song
-
-
-def _download_metadata(library: LibraryPaths, song_id: str) -> dict[str, Any] | None:
-    for path in sorted(library.raw_dir(song_id).glob("source*.info.json")):
-        data = read_json(path, default={})
-        if not isinstance(data, dict):
-            continue
-        return {
-            key: data.get(key)
-            for key in ["id", "title", "uploader", "channel", "webpage_url", "duration", "extractor"]
-            if data.get(key) is not None
-        }
-    return None
-
-
-def _validate_audio_index(source: Path, audio_index: int) -> None:
-    if audio_index < 0:
-        raise PipelineStateError("Audio track index must be 0 or greater.")
-    info = probe_media(source)
-    count = len(info["audio_streams"])
-    if audio_index >= count:
-        raise PipelineStateError(
-            f"Audio Track {audio_index + 1} does not exist. This source has {count} audio track(s)."
-        )
-
-
-def _validate_probe_has_required_streams(info: dict[str, Any]) -> None:
-    if not info["video_streams"]:
-        raise PipelineStateError("Source media has no video stream.")
-    if not info["audio_streams"]:
-        raise PipelineStateError("Source media has no audio stream.")
-
-
-def _archive_take(library: LibraryPaths, song_id: str, path: Path, *, label: str = "") -> Path:
-    if not path.exists():
-        return path
-    stamp = utc_now().replace("+00:00", "Z").replace(":", "").replace("-", "")
-    take = library.takes_dir(song_id) / f"{path.stem}.{stamp}{path.suffix}"
-    take.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(path, take)
-    record_take(library, song_id, take, label=label)
-    return take
-
-
-def _copy_templated_output(library: LibraryPaths, song_id: str, path: Path, *, kind: str) -> Path | None:
-    settings = load_settings(library)
-    filename = render_output_filename(
-        str(settings.get("output_template") or "{song_id}.ktv.mkv"),
-        {"song_id": song_id, "kind": kind},
-        suffix=path.suffix,
-    )
-    target = library.output_dir(song_id) / filename
-    if target == path:
-        return None
-    shutil.copy2(path, target)
-    return target
-
-
-@contextmanager
-def song_lock(library: LibraryPaths, song_id: str) -> Iterator[None]:
-    path = library.lock_file(song_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    inprocess = _inprocess_song_lock(song_id)
-    with inprocess:
-        with path.open("w", encoding="utf-8") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-
-
-def _inprocess_song_lock(song_id: str) -> threading.Lock:
-    clean_id = normalize_song_id(song_id)
-    with _LOCKS_GUARD:
-        lock = _SONG_LOCKS.get(clean_id)
-        if lock is None:
-            lock = threading.Lock()
-            _SONG_LOCKS[clean_id] = lock
-        return lock

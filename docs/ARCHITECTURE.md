@@ -10,6 +10,10 @@
 - `alignment.py`: lyrics alignment abstraction; LRC timing, FunASR when installed, deterministic draft fallback otherwise.
 - `ass.py`: ASS karaoke subtitle generation.
 - `quality.py`: WAV quality checks and MKV stream audit summaries.
+- `preflight.py`: module readiness checks shared by CLI and Web.
+- `track_roles.py`: manual and inferred source-audio roles used during track decisions.
+- `mux_plan.py`: pre-mux track-order previews for final KTV and audio-replaced MKVs.
+- `recipes.py`: named batch recipes built from independently runnable stages.
 - `progress.py`: stage progress estimation, especially Demucs log parsing.
 - `diagnostics.py`: local dependency and per-song failure diagnosis.
 - `planner.py`: next-action suggestions derived from current song files and reports.
@@ -17,12 +21,14 @@
 - `exporter.py`: ZIP packaging for current outputs, reports, lyrics, and takes.
 - `checkpoints.py`: per-stage checkpoint state used during job recovery.
 - `pipeline.py`: stage orchestration and status/report writing.
+- `pipeline_support.py`: pipeline helpers for locks, output discovery, validation, takes, and import reports.
 - `jobs.py`: file-backed local queue for long-running Web tasks.
 - `versions.py`: output take metadata, notes, delete, and set-current behavior.
 - `waveform.py`: lightweight WAV waveform SVG rendering for subtitle timing.
 - `cli.py`: `ktv` command line interface.
 - `web.py`: local FastAPI routes.
-- `views.py`: server-rendered HTML for the local workbench.
+- `views.py`: top-level server-rendered pages and compatibility re-exports.
+- `view_common.py` / `view_song.py` / `view_admin.py`: shared HTML helpers, song workbench panels, and admin/diagnostic pages.
 - `templates/base.html`: shared page shell for the local Web UI.
 - `static/style.css` / `static/app.js`: Web UI styling and small browser helpers without a frontend build step.
 
@@ -75,6 +81,13 @@ library/
 12. `process-from`: run the remaining main stages from `probe`, `extract`, `separate`, `align`, or `mux`.
 13. `clean-work`: remove regenerable intermediate files while keeping source and outputs.
 
+Additional independently runnable decisions:
+
+- `track-role`: persist a manual role for a source audio stream.
+- `mux-plan`: preview final KTV stream order before writing the MKV.
+- `replace-plan`: preview Track 2 replacement stream order before writing the MKV.
+- `batch-recipe`: run named multi-stage flows such as `instrumental-review`, `full-instrumental`, `replace-track2`, and `final-ktv`.
+
 ## Web Behavior
 
 Long-running stage buttons enqueue a file-backed local job and immediately return to the song page. On app startup, jobs left in `queued` or `running` state are recovered and queued again. Jobs run with a small worker pool configured by `settings.json`, so different songs can progress in parallel, while each song is still serialized by the per-song lock.
@@ -91,4 +104,8 @@ Mux stages run FFprobe against the generated MKV and write an audit summary with
 
 The Web detail page asks `planner.py` for next actions rather than hard-coding a single linear happy path. This keeps the UI flexible when a user only wants to preview tracks, replace audio, edit subtitles, or export a package.
 
+The song page starts with task cards and keeps the dense advanced workbench collapsed by default. This is deliberate: a user who only wants to generate a sample instrumental should not have to scan every mux, subtitle, storage, and diagnostics control.
+
 Track previews are stored as `track-{track}.wav` for the first segment and `track-{track}-{segment}.wav` for additional segments. Web audio routes map those names back to playable clips.
+
+Manual source-track roles and mux plans are stored in `report.json`, so CLI and Web see the same decisions and support bundles include the reasoning behind a final MKV.

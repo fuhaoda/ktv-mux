@@ -1,7 +1,7 @@
 import struct
 import wave
 
-from ktv_mux.quality import analyze_wav, mkv_audit_report, separation_quality_report
+from ktv_mux.quality import analyze_wav, instrumental_fit_report, mkv_audit_report, separation_quality_report
 
 
 def write_wav(path, amplitude):
@@ -90,6 +90,19 @@ def test_quality_report_warns_on_duration_mismatch(tmp_path):
 
     assert report["duration_delta_seconds"] > 0.5
     assert any("duration" in item.lower() for item in report["recommendations"])
+
+
+def test_instrumental_fit_report_compares_external_audio_to_mix(tmp_path):
+    mix = tmp_path / "mix.wav"
+    external = tmp_path / "instrumental.wav"
+    write_wav_with_frames(mix, 1000, 8000)
+    write_wav_with_frames(external, 1000, 800)
+
+    report = instrumental_fit_report(reference_wav=mix, instrumental_wav=external)
+
+    assert report["ok"] is False
+    assert any("Duration differs" in item for item in report["warnings"])
+    assert report["recommendations_zh"]
 
 
 def test_mkv_audit_report_checks_stream_counts_and_defaults():

@@ -9,6 +9,7 @@ from ktv_mux.media import (
     build_extract_subtitle_cmd,
     build_mux_cmd,
     build_normalize_wav_cmd,
+    build_render_audio_wav_cmd,
     build_replace_audio_track_cmd,
     parse_probe_json,
 )
@@ -75,6 +76,44 @@ def test_build_normalize_wav_cmd_uses_loudnorm():
     cmd = build_normalize_wav_cmd(Path("in.wav"), Path("out.wav"), target_i=-18)
     assert any("loudnorm=I=-18.0" in part for part in cmd)
     assert cmd[-1] == "out.wav"
+
+
+def test_build_render_audio_wav_cmd_transcodes_external_audio():
+    cmd = build_render_audio_wav_cmd(Path("candidate.mp3"), Path("instrumental.wav"))
+
+    assert cmd[:3] == ["ffmpeg", "-y", "-hide_banner"]
+    assert "candidate.mp3" in cmd
+    assert "-c:a" in cmd
+    assert "pcm_s16le" in cmd
+    assert "-ar" in cmd
+    assert "44100" in cmd
+    assert cmd[-1] == "instrumental.wav"
+
+
+def test_build_render_audio_wav_cmd_can_fit_offset_gain_and_normalize():
+    cmd = build_render_audio_wav_cmd(
+        Path("candidate.mp3"),
+        Path("instrumental.wav"),
+        offset=0.5,
+        target_duration=30.0,
+        gain_db=-2.5,
+        normalize=True,
+    )
+
+    assert "-af" in cmd
+    filters = cmd[cmd.index("-af") + 1]
+    assert "adelay=500:all=1" in filters
+    assert "apad=whole_dur=30.000" in filters
+    assert "atrim=duration=30.000" in filters
+    assert "volume=-2.500dB" in filters
+    assert "loudnorm=I=-16.0" in filters
+
+
+def test_build_render_audio_wav_cmd_negative_offset_trims_input():
+    cmd = build_render_audio_wav_cmd(Path("candidate.mp3"), Path("instrumental.wav"), offset=-1.25)
+
+    assert "-ss" in cmd
+    assert "1.250" in cmd
 
 
 def test_build_mux_cmd_has_dual_audio_metadata_and_default_instrumental():

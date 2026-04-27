@@ -240,6 +240,27 @@ def create_app(library: LibraryPaths | None = None):
                 break
         return RedirectResponse("/", status_code=303)
 
+    @app.post("/batch-recipe")
+    def batch_recipe_route(
+        recipe: str = Form("instrumental-review"),
+        audio_index: int = Form(0),
+        separation_preset: str = Form("fast-review"),
+        dry_run: str = Form(""),
+    ):
+        plan = pipeline.batch_recipe(
+            recipe,
+            dry_run=True,
+            audio_index=audio_index,
+            separation_preset=separation_preset,
+        )
+        if dry_run:
+            return PlainTextResponse(json.dumps(plan, ensure_ascii=False, indent=2), status_code=200)
+        for song in plan.get("songs") or []:
+            song_id = str(song.get("song_id") or "")
+            for stage in song.get("stages") or []:
+                runner.submit(song_id, str(stage), {"audio_index": audio_index, "separation_preset": separation_preset})
+        return RedirectResponse("/", status_code=303)
+
     @app.get("/events")
     async def events():
         async def stream():
@@ -346,12 +367,39 @@ def create_app(library: LibraryPaths | None = None):
         return RedirectResponse(song_url(song_id), status_code=303)
 
     @app.post("/songs/{song_id}/instrumental-file")
-    async def upload_instrumental(song_id: str, file: UploadFile = File(...), label: str = Form("external instrumental")):
+    async def upload_instrumental(
+        song_id: str,
+        file: UploadFile = File(...),
+        label: str = Form("external instrumental"),
+        offset: float = Form(0.0),
+        gain_db: float = Form(0.0),
+        fit_to_mix: str = Form(""),
+        normalize: str = Form(""),
+    ):
         clean_id = normalize_song_id(song_id)
         temp = library.output_dir(clean_id) / f"uploaded-{Path(file.filename or 'instrumental.wav').name}"
         temp.parent.mkdir(parents=True, exist_ok=True)
         temp.write_bytes(await file.read())
-        pipeline.set_instrumental(clean_id, temp, label=label or "external instrumental")
+        pipeline.set_instrumental(
+            clean_id,
+            temp,
+            label=label or "external instrumental",
+            offset=offset,
+            gain_db=gain_db,
+            fit_to_mix=bool(fit_to_mix),
+            normalize=bool(normalize),
+        )
+        return RedirectResponse(song_url(clean_id), status_code=303)
+
+    @app.post("/songs/{song_id}/track-role")
+    def save_track_role(
+        song_id: str,
+        audio_index: int = Form(0),
+        role: str = Form("unknown"),
+        note: str = Form(""),
+    ):
+        clean_id = normalize_song_id(song_id)
+        pipeline.set_track_role(clean_id, audio_index=audio_index, role=role, note=note)
         return RedirectResponse(song_url(clean_id), status_code=303)
 
     @app.post("/songs/{song_id}/alignment")
